@@ -1,0 +1,139 @@
+# ============================================================
+#  AI-Trade — AGGRESSIVE MODE
+#
+#  Target: Higher trade frequency, larger position sizes,
+#          lower confirmation threshold.
+#
+#  Use case: Demo account / seasoned operators who understand
+#            this mode will experience larger drawdowns.
+#
+#  Usage: cp config_aggressive.yaml config.yaml  (then restart)
+# ============================================================
+
+trading:
+  symbols: ["XAUUSD"]
+  timeframe: "M15"
+  magic_number: 20240101
+
+risk:
+  risk_per_trade:       0.015  # 1.5% base (vs 0.8% baseline).
+                                # Max 3 concurrent → 4.5% max exposure.
+  max_concurrent_trades: 3     # Allow 3 open simultaneously (pyramiding).
+  max_daily_loss:       0.05   # 5% daily stop (wider circuit breaker).
+  max_drawdown:         0.15   # 15% halt (more tolerance for drawdowns).
+  min_rr_ratio:         1.5    # 1.5:1 — allow lower-RR setups for frequency.
+
+  atr_sl_multiplier:    1.5    # Tighter SL → larger position size → more P&L per pip.
+  atr_tp_multiplier:    4.5    # 4.5/1.5 = 3:1 RR (higher than baseline).
+
+  use_kelly:            true
+  kelly_max_fraction:   0.030  # Allow up to 3% per trade.
+
+  dd_scale_start:       0.06
+  dd_scale_min:         0.40
+
+  max_loss_streak:      4      # More tolerance before scaling back.
+  loss_streak_scale:    0.65
+
+  mode: "aggressive"
+  safe_risk_multiplier: 0.50
+  aggressive_risk_multiplier: 1.25
+
+strategy:
+  ema_fast: 50
+  ema_slow: 200
+
+  rsi_period: 14
+  rsi_buy_min:  40     # Wider RSI band — more signals.
+  rsi_buy_max:  78
+  rsi_sell_min: 22
+  rsi_sell_max: 60
+
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+
+  atr_period: 14
+  atr_threshold_multiplier: 0.35   # Lower ATR bar — trade in quieter markets too.
+
+  structure_lookback: 15           # Shorter lookback = faster structure detection.
+  swing_strength: 4                # Less strict swing confirmation.
+
+  min_confluence: 2               # Only 2/4 scored conditions needed.
+                                   # WARNING: significantly more false signals.
+
+  adx_period: 14
+  adx_trend_threshold:    20      # Catch trends earlier.
+  adx_range_threshold:    15
+  adx_high_vol_threshold: 45
+
+  bb_period: 20
+  bb_std: 2.0
+  stoch_k: 14
+  stoch_d: 3
+  stoch_smooth: 3
+
+  range_rsi_oversold:   38
+  range_rsi_overbought: 62
+  range_bb_pct_buy:  0.18
+  range_bb_pct_sell: 0.82
+
+  high_vol_sl_multiplier: 1.4
+  high_vol_size_scale: 0.75        # Keep more size in volatile markets.
+
+sessions:
+  london:
+    start: "06:00"               # Start earlier to catch Asian/London crossover.
+    end:   "17:00"
+  new_york:
+    start: "12:00"
+    end:   "22:00"               # Extend into late NY.
+
+ai:
+  enabled: true
+  min_confidence: 48             # 48% — model just needs to lean slightly.
+                                  # Increases trade frequency by ~40%.
+  model_type: "ensemble"
+  retrain_interval: 720          # Retrain every 12h (more adaptive).
+  forward_bars: 8                # Shorter forward window for labelling.
+  target_move_pct: 0.0025        # 0.25% target — more positive labels → better training.
+
+trade_management:
+  breakeven_r:          0.8      # Move to BE earlier at 0.8R.
+  breakeven_buffer_pts: 3
+
+  trailing_r:           1.2      # Start trailing earlier.
+  trailing_atr_mult:    0.8      # Tighter trail — lock profits faster.
+  trailing_step_r:      0.4
+
+  partial_close: true
+  partial_close_stages:
+    - r: 0.8
+      pct: 0.20                  # Small first close — let winners run longer.
+    - r: 1.8
+      pct: 0.30
+    - r: 3.0
+      pct: 0.50
+
+  time_exit_enabled: true
+  time_exit_bars:    36          # Kill stale trades after 9 hours.
+  time_exit_min_r:  -0.2
+
+  cooldown_minutes: 30           # Only 30 min cooldown → more re-entries.
+  min_sl_points:    10.0
+  max_spread_gold:  20.0         # More tolerant of spread during news.
+  max_spread_forex:  8.0
+
+execution:
+  max_retries: 3
+  retry_delay: 1
+  deviation:   30                # More slippage tolerance for faster fills.
+
+dashboard:
+  refresh_interval: 5
+  port: 8000
+
+logging:
+  level: "INFO"
+  file: "logs/trading.log"
+  max_size_mb: 50

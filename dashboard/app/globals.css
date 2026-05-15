@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root { color-scheme: dark; }
+
+  * { box-sizing: border-box; }
+
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: #0d1424; }
+  ::-webkit-scrollbar-thumb { background: #1e2d40; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #2e4060; }
+}
+
+@layer components {
+  /* Card container */
+  .card {
+    @apply bg-[#0d1424] border border-[#1e2d40] rounded-xl p-4;
+  }
+  .card-sm {
+    @apply bg-[#0d1424] border border-[#1e2d40] rounded-lg p-3;
+  }
+
+  /* Section title */
+  .section-title {
+    @apply text-xs font-semibold uppercase tracking-widest text-gray-500 mb-3;
+  }
+
+  /* Stat value */
+  .stat-value {
+    @apply font-mono text-2xl font-bold text-white;
+  }
+  .stat-label {
+    @apply text-xs text-gray-500 uppercase tracking-wider mt-1;
+  }
+
+  /* Signal badge */
+  .signal-buy    { @apply bg-emerald-500/20 text-emerald-400 border border-emerald-500/30; }
+  .signal-sell   { @apply bg-red-500/20     text-red-400     border border-red-500/30; }
+  .signal-hold   { @apply bg-gray-500/20    text-gray-400    border border-gray-500/30; }
+
+  /* Price flash animation */
+  .flash-up   { animation: flashGreen 0.6s ease-out; }
+  .flash-down { animation: flashRed   0.6s ease-out; }
+
+  /* Terminal line */
+  .term-line { @apply flex gap-2 text-xs font-mono py-0.5 border-b border-[#0d1424]; }
+
+  /* Glow effects */
+  .glow-green { box-shadow: 0 0 20px rgba(0,232,150,0.15); }
+  .glow-red   { box-shadow: 0 0 20px rgba(255,77,106,0.15); }
+  .glow-blue  { box-shadow: 0 0 20px rgba(77,166,255,0.15); }
+}
+
+@keyframes flashGreen {
+  0%   { background-color: rgba(0,232,150,0.2); }
+  100% { background-color: transparent; }
+}
+@keyframes flashRed {
+  0%   { background-color: rgba(255,77,106,0.2); }
+  100% { background-color: transparent; }
+}
+@keyframes slideUp {
+  from { transform: translateY(6px); opacity: 0; }
+  to   { transform: translateY(0);   opacity: 1; }
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+.animate-slide-up  { animation: slideUp 0.25s ease-out; }
+.animate-blink     { animation: blink 1.2s step-end infinite; }

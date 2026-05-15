@@ -1,0 +1,416 @@
+"""
+utils.py — Shared utilities: logging, indicator math, market structure,
+           database helpers, and state I/O.
+"""
+
+import json
+import logging
+import logging.handlers
+import sqlite3
+import numpy as np
+import pandas as pd
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Tuple
+
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+
+def setup_logging(config: dict) -> logging.Logger:
+    log_cfg = config['logging']
+    log_path = Path(log_cfg['file'])
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    logger = logging.getLogger('AI-Trade')
+    logger.setLevel(getattr(logging, log_cfg['level'].upper(), logging.INFO))
+
+    fmt = logging.Formatter('%(asctime)s | %(levelname)-8s | %(message)s',
+                            datefmt='%Y-%m-%d %H:%M:%S')
+
+    fh = logging.handlers.RotatingFileHandler(
+        log_path,
+        maxBytes=log_cfg['max_size_mb'] * 1024 * 1024,
+        backupCount=5,
+        encoding='utf-8',
+    )
+    fh.setFormatter(fmt)
+
+    ch = logging.StreamHandler()
+    ch.setFormatter(fmt)
+
+    if not logger.handlers:
+        logger.addHandler(fh)
+        logger.addHandler(ch)
+
+    return logger
+
+
+# ── Technical indicators ──────────────────────────────────────────────────────
+
+def compute_ema(series: pd.Series, period: int) -> pd.Series:
+    return series.ewm(span=period, adjust=False).mean()
+
+
+def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
+    avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+def compute_macd(
+    series: pd.Series, fast: int, slow: int, signal: int
+) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    ema_fast = compute_ema(series, fast)
+    ema_slow = compute_ema(series, slow)
+    macd_line = ema_fast - ema_slow
+    signal_line = compute_ema(macd_line, signal)
+    histogram = macd_line - signal_line
+    return macd_line, signal_line, histogram
+
+
+def compute_atr(
+    high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
+) -> pd.Series:
+    tr = pd.concat(
+        [high - low,
+         (high - close.shift(1)).abs(),
+         (low - close.shift(1)).abs()],
+        axis=1
+    ).max(axis=1)
+    return tr.ewm(com=period - 1, min_periods=period).mean()
+
+
+def compute_adx(
+    high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
+) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """Return (ADX, +DI, -DI) series."""
+    high_arr  = high.values.astype(float)
+    low_arr   = low.values.astype(float)
+    close_arr = close.values.astype(float)
+    n = len(close_arr)
+
+    plus_dm  = np.zeros(n)
+    minus_dm = np.zeros(n)
+    tr_arr   = np.zeros(n)
+
+    for i in range(1, n):
+        h_diff = high_arr[i] - high_arr[i - 1]
+        l_diff = low_arr[i - 1] - low_arr[i]
+        plus_dm[i]  = h_diff if h_diff > l_diff and h_diff > 0 else 0.0
+        minus_dm[i] = l_diff if l_diff > h_diff and l_diff > 0 else 0.0
+        tr_arr[i] = max(
+            high_arr[i] - low_arr[i],
+            abs(high_arr[i] - close_arr[i - 1]),
+            abs(low_arr[i] - close_arr[i - 1]),
+        )
+
+    idx = close.index
+    tr_s   = pd.Series(tr_arr, index=idx)
+    pdm_s  = pd.Series(plus_dm, index=idx)
+    mdm_s  = pd.Series(minus_dm, index=idx)
+
+    atr14   = tr_s.ewm(com=period - 1, min_periods=period).mean()
+    pdm14   = pdm_s.ewm(com=period - 1, min_periods=period).mean()
+    mdm14   = mdm_s.ewm(com=period - 1, min_periods=period).mean()
+
+    plus_di  = 100.0 * pdm14 / atr14.replace(0, np.nan)
+    minus_di = 100.0 * mdm14 / atr14.replace(0, np.nan)
+
+    dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    adx = dx.ewm(com=period - 1, min_periods=period).mean()
+
+    return adx.fillna(0), plus_di.fillna(0), minus_di.fillna(0)
+
+
+def compute_bollinger(
+    close: pd.Series, period: int = 20, std_dev: float = 2.0
+) -> Tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+    """Return (middle, upper, lower, pct_b) where pct_b ∈ [0, 1]."""
+    mid   = close.rolling(period).mean()
+    sigma = close.rolling(period).std()
+    upper = mid + std_dev * sigma
+    lower = mid - std_dev * sigma
+    band_width = upper - lower
+    pct_b = (close - lower) / band_width.replace(0, np.nan)
+    return mid, upper, lower, pct_b.fillna(0.5)
+
+
+def compute_stochastic(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    k_period: int = 14, d_period: int = 3, smooth: int = 3
+) -> Tuple[pd.Series, pd.Series]:
+    """Return (%K, %D) stochastic oscillator."""
+    lowest_low   = low.rolling(k_period).min()
+    highest_high = high.rolling(k_period).max()
+    raw_k = 100.0 * (close - lowest_low) / (highest_high - lowest_low).replace(0, np.nan)
+    k = raw_k.rolling(smooth).mean().fillna(50)
+    d = k.rolling(d_period).mean().fillna(50)
+    return k, d
+
+
+def compute_indicators(df: pd.DataFrame, config: dict) -> pd.DataFrame:
+    """Return a copy of df with all strategy indicators appended."""
+    s  = config['strategy']
+    df = df.copy()
+
+    df['ema50']        = compute_ema(df['close'], s['ema_fast'])
+    df['ema200']       = compute_ema(df['close'], s['ema_slow'])
+    df['rsi']          = compute_rsi(df['close'], s['rsi_period'])
+    df['macd_line'], df['macd_signal'], df['macd_hist'] = compute_macd(
+        df['close'], s['macd_fast'], s['macd_slow'], s['macd_signal']
+    )
+    df['atr'] = compute_atr(df['high'], df['low'], df['close'], s['atr_period'])
+
+    # ADX / DI
+    adx_period = s.get('adx_period', 14)
+    df['adx'], df['plus_di'], df['minus_di'] = compute_adx(
+        df['high'], df['low'], df['close'], adx_period
+    )
+
+    # Bollinger Bands
+    bb_period = s.get('bb_period', 20)
+    bb_std    = s.get('bb_std', 2.0)
+    df['bb_mid'], df['bb_upper'], df['bb_lower'], df['bb_pct'] = compute_bollinger(
+        df['close'], bb_period, bb_std
+    )
+
+    # Stochastic
+    df['stoch_k'], df['stoch_d'] = compute_stochastic(
+        df['high'], df['low'], df['close'],
+        s.get('stoch_k', 14), s.get('stoch_d', 3), s.get('stoch_smooth', 3)
+    )
+
+    return df.dropna()
+
+
+# ── Market structure ──────────────────────────────────────────────────────────
+
+def _find_swing_highs(highs: pd.Series, strength: int = 5) -> pd.Series:
+    result = pd.Series(False, index=highs.index)
+    arr = highs.values
+    for i in range(strength, len(arr) - strength):
+        window = arr[i - strength: i + strength + 1]
+        if arr[i] == window.max():
+            result.iloc[i] = True
+    return result
+
+
+def _find_swing_lows(lows: pd.Series, strength: int = 5) -> pd.Series:
+    result = pd.Series(False, index=lows.index)
+    arr = lows.values
+    for i in range(strength, len(arr) - strength):
+        window = arr[i - strength: i + strength + 1]
+        if arr[i] == window.min():
+            result.iloc[i] = True
+    return result
+
+
+def detect_market_structure(
+    df: pd.DataFrame, lookback: int = 20, strength: int = 5
+) -> Tuple[bool, bool, Optional[float], Optional[float]]:
+    needed = (lookback * 3) + (strength * 2) + 5
+    if len(df) < needed:
+        return False, False, None, None
+
+    recent = df.tail(needed)
+
+    sh_mask = _find_swing_highs(recent['high'], strength)
+    sl_mask = _find_swing_lows(recent['low'], strength)
+
+    swing_highs = recent['high'][sh_mask].values
+    swing_lows  = recent['low'][sl_mask].values
+
+    if len(swing_highs) < 2 or len(swing_lows) < 2:
+        return False, False, None, None
+
+    last_sh, prev_sh = float(swing_highs[-1]), float(swing_highs[-2])
+    last_sl, prev_sl = float(swing_lows[-1]),  float(swing_lows[-2])
+
+    hh_hl = (last_sh > prev_sh) and (last_sl > prev_sl)
+    lh_ll = (last_sh < prev_sh) and (last_sl < prev_sl)
+
+    return hh_hl, lh_ll, last_sh, last_sl
+
+
+# ── SQLite database ───────────────────────────────────────────────────────────
+
+DB_PATH = Path('data/trades.db')
+
+
+def init_db() -> None:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.executescript('''
+        CREATE TABLE IF NOT EXISTS trades (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket        INTEGER UNIQUE,
+            symbol        TEXT,
+            direction     TEXT,
+            lot_size      REAL,
+            entry_price   REAL,
+            sl_price      REAL,
+            tp_price      REAL,
+            open_time     TEXT,
+            close_time    TEXT,
+            close_price   REAL,
+            profit        REAL,
+            status        TEXT DEFAULT 'open',
+            ai_confidence REAL,
+            notes         TEXT
+        );
+        CREATE TABLE IF NOT EXISTS equity_curve (
+            ts      TEXT PRIMARY KEY,
+            balance REAL,
+            equity  REAL
+        );
+        CREATE TABLE IF NOT EXISTS activity_log (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts      TEXT,
+            symbol  TEXT NOT NULL,
+            message TEXT NOT NULL,
+            type    TEXT DEFAULT 'info'
+        );
+    ''')
+    conn.commit()
+
+    conn.execute("DELETE FROM activity_log WHERE LENGTH(ts) <= 8")
+    conn.commit()
+    conn.close()
+
+
+def log_activity(symbol: str, message: str, msg_type: str = 'info') -> None:
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        conn.execute(
+            'INSERT INTO activity_log (ts, symbol, message, type) VALUES (?,?,?,?)',
+            (ts, symbol, message, msg_type),
+        )
+        conn.execute(
+            '''DELETE FROM activity_log
+               WHERE symbol=? AND id NOT IN (
+                   SELECT id FROM activity_log WHERE symbol=? ORDER BY id DESC LIMIT 100
+               )''',
+            (symbol, symbol),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def get_recent_activity(symbol: Optional[str] = None, limit: int = 20) -> list:
+    if not DB_PATH.exists():
+        return []
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        if symbol:
+            rows = conn.execute(
+                'SELECT ts, symbol, message, type FROM activity_log '
+                'WHERE symbol=? ORDER BY id DESC LIMIT ?',
+                (symbol.upper(), limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                'SELECT ts, symbol, message, type FROM activity_log '
+                'ORDER BY id DESC LIMIT ?',
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def insert_trade(trade: dict) -> None:
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute(
+        '''INSERT OR REPLACE INTO trades
+           (ticket, symbol, direction, lot_size, entry_price, sl_price, tp_price,
+            open_time, ai_confidence, status)
+           VALUES (:ticket, :symbol, :direction, :lot_size, :entry_price,
+                   :sl_price, :tp_price, :open_time, :ai_confidence, 'open')''',
+        trade,
+    )
+    conn.commit()
+    conn.close()
+
+
+def close_trade_db(ticket: int, close_price: float, close_time: str, profit: float) -> None:
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute(
+        '''UPDATE trades
+           SET close_price=?, close_time=?, profit=?, status='closed'
+           WHERE ticket=?''',
+        (close_price, close_time, profit, ticket),
+    )
+    conn.commit()
+    conn.close()
+
+
+def record_equity(balance: float, equity: float) -> None:
+    conn = sqlite3.connect(str(DB_PATH))
+    ts = datetime.now().isoformat(timespec='seconds')
+    conn.execute(
+        'INSERT OR REPLACE INTO equity_curve (ts, balance, equity) VALUES (?,?,?)',
+        (ts, balance, equity),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_trade_stats() -> dict:
+    if not DB_PATH.exists():
+        return {'win_rate': 0.0, 'profit_factor': 0.0, 'total_trades': 0, 'total_profit': 0.0}
+    conn = sqlite3.connect(str(DB_PATH))
+    rows = conn.execute(
+        "SELECT profit FROM trades WHERE status='closed'"
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        return {'win_rate': 0.0, 'profit_factor': 0.0, 'total_trades': 0, 'total_profit': 0.0}
+
+    profits = [r[0] for r in rows if r[0] is not None]
+    wins    = [p for p in profits if p > 0]
+    losses  = [p for p in profits if p < 0]
+
+    win_rate      = len(wins) / len(profits) * 100 if profits else 0.0
+    gross_profit  = sum(wins)
+    gross_loss    = abs(sum(losses))
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else (
+        float('inf') if gross_profit > 0 else 0.0
+    )
+
+    return {
+        'win_rate':      round(win_rate, 2),
+        'profit_factor': round(profit_factor, 3),
+        'total_trades':  len(profits),
+        'total_profit':  round(sum(profits), 2),
+    }
+
+
+# ── Shared state JSON (live → dashboard) ─────────────────────────────────────
+
+_STATE_PATH = Path('data/state.json')
+_STATE_TMP  = Path('data/state.tmp.json')
+
+
+def write_state(state: dict) -> None:
+    _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _STATE_TMP.write_text(json.dumps(state, indent=2, default=str), encoding='utf-8')
+    _STATE_TMP.replace(_STATE_PATH)
+
+
+def read_state() -> dict:
+    if not _STATE_PATH.exists():
+        return {}
+    try:
+        return json.loads(_STATE_PATH.read_text(encoding='utf-8'))
+    except Exception:
+        return {}

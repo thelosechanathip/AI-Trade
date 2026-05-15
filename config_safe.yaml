@@ -1,0 +1,145 @@
+# ============================================================
+#  AI-Trade — SAFE MODE
+#
+#  Target: Smooth equity curve, low drawdown, slow-but-steady
+#          capital growth. Ideal for live accounts, prop firms,
+#          or periods of high macro uncertainty.
+#
+#  Characteristics vs baseline:
+#    - ~60% fewer trades (all filters tightened)
+#    - Max daily loss reduced to 1.5%
+#    - AI confidence threshold raised to 65%
+#    - Only trades London+NY overlap (12:00–16:00 UTC)
+#
+#  Usage: cp config_safe.yaml config.yaml  (then restart)
+# ============================================================
+
+trading:
+  symbols: ["XAUUSD"]
+  timeframe: "M15"
+  magic_number: 20240101
+
+risk:
+  risk_per_trade:       0.005   # 0.5% base. Even a 10-loss streak = 5% DD.
+  max_concurrent_trades: 1      # Single position only. No correlated exposure.
+  max_daily_loss:       0.015   # 1.5% daily limit. Two full losses max per day.
+  max_drawdown:         0.07    # 7% halt — more sensitive to regime change.
+  min_rr_ratio:         2.2     # 2.2:1 — only high-quality setups.
+
+  atr_sl_multiplier:    2.2     # Wider SL — fewer stop-outs, better trade quality.
+  atr_tp_multiplier:    4.8     # 4.8/2.2 ≈ 2.18:1 RR.
+
+  use_kelly:            true
+  kelly_max_fraction:   0.012   # Hard cap at 1.2% even if Kelly says more.
+
+  dd_scale_start:       0.03    # Start scaling back at just 3% drawdown.
+  dd_scale_min:         0.25    # At 7% DD, trade at 25% of normal size.
+
+  max_loss_streak:      2       # Two consecutive losses → halve size immediately.
+  loss_streak_scale:    0.40
+
+  mode: "safe"
+  safe_risk_multiplier: 0.50
+  aggressive_risk_multiplier: 1.25
+
+strategy:
+  ema_fast: 50
+  ema_slow: 200
+
+  rsi_period: 14
+  rsi_buy_min:  52    # Stricter: only enter when RSI confirms momentum.
+  rsi_buy_max:  70
+  rsi_sell_min: 30
+  rsi_sell_max: 48
+
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+
+  atr_period: 14
+  atr_threshold_multiplier: 0.65   # Higher ATR bar — only trade during real moves.
+
+  structure_lookback: 25           # Longer lookback = more reliable structure.
+  swing_strength: 6                # Stricter swing confirmation.
+
+  min_confluence: 4               # ALL 4 scored conditions required.
+                                   # Drastically reduces false signals.
+
+  adx_period: 14
+  adx_trend_threshold:    28      # Stricter trend requirement.
+  adx_range_threshold:    20
+  adx_high_vol_threshold: 38      # Treat high-vol as risky sooner.
+
+  bb_period: 20
+  bb_std: 2.0
+  stoch_k: 14
+  stoch_d: 3
+  stoch_smooth: 3
+
+  range_rsi_oversold:   28         # Only extreme oversold for range buys.
+  range_rsi_overbought: 72
+  range_bb_pct_buy:  0.08          # Must be right at the bottom band.
+  range_bb_pct_sell: 0.92
+
+  high_vol_sl_multiplier: 2.0     # Much wider SL in high-vol → skip most high-vol.
+  high_vol_size_scale: 0.50       # Only 50% size in high-vol regime.
+
+# SAFE MODE: only trade the London/NY overlap — highest liquidity,
+# tightest spreads, most institutional participation.
+sessions:
+  london:
+    start: "12:00"               # Only overlap window.
+    end:   "16:00"
+  new_york:
+    start: "12:00"
+    end:   "16:00"
+
+ai:
+  enabled: true
+  min_confidence: 65             # 65%: model must have strong directional conviction.
+                                  # At 55% this generates 3–4 signals/day;
+                                  # at 65% typically 1–2 very high-quality signals.
+  model_type: "ensemble"
+  retrain_interval: 2880         # Retrain every 48h (avoid over-fitting to noise).
+  forward_bars: 12               # Slightly longer forward window for cleaner labels.
+  target_move_pct: 0.0035        # 0.35% target — only genuine directional moves.
+
+trade_management:
+  breakeven_r:          1.0
+  breakeven_buffer_pts: 8        # Larger buffer to avoid being stopped by spread/noise.
+
+  trailing_r:           2.0      # Only start trailing at 2R (let trades develop).
+  trailing_atr_mult:    1.2      # Wider trail — never choke a winning trade early.
+  trailing_step_r:      0.6
+
+  partial_close: true
+  partial_close_stages:
+    - r: 1.5
+      pct: 0.25                  # Small first close — don't rush to take profits.
+    - r: 2.5
+      pct: 0.35
+    - r: 4.0
+      pct: 0.40
+
+  time_exit_enabled: true
+  time_exit_bars:    32          # Kill after 8 hours if not moving.
+  time_exit_min_r:  -0.4        # Only kill clearly losing positions.
+
+  cooldown_minutes: 120          # 2h cooldown — very conservative re-entry.
+  min_sl_points:    15.0         # Wider minimum SL.
+  max_spread_gold:  12.0         # Very tight spread filter — only cleanest market.
+  max_spread_forex:  4.0
+
+execution:
+  max_retries: 3
+  retry_delay: 2                 # Longer delay between retries.
+  deviation:   15                # Less slippage tolerance.
+
+dashboard:
+  refresh_interval: 5
+  port: 8000
+
+logging:
+  level: "INFO"
+  file: "logs/trading.log"
+  max_size_mb: 50

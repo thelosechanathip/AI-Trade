@@ -1,0 +1,49 @@
+# ── Python ──────────────────────────────────────────────────
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Runtime data (machine-specific, regenerated) ─────────────
+data/trades.db
+data/state.json
+data/risk_state.json
+data/ai_insights.json
+data/learning_stats.json
+data/optimizer_history.json
+data/training_monitor.json
+
+# ── Trained models (retrained on each machine) ───────────────
+models/*.pkl
+models/*.pt
+models/*.joblib
+
+# ── Logs ────────────────────────────────────────────────────
+logs/*.log
+logs/*.log.*
+
+# ── Release archives ─────────────────────────────────────────
+releases/
+
+# ── IDE / OS ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.user
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Node (dashboard) ─────────────────────────────────────────
+dashboard/node_modules/
+dashboard/.next/
+dashboard/.env.local
+
+# ── Claude tooling ───────────────────────────────────────────
+.claude/

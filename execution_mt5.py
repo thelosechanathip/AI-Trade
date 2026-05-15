@@ -1,0 +1,357 @@
+"""
+execution_mt5.py — All MetaTrader 5 interactions.
+
+Key improvements over naive initialize():
+  1. _wait_terminal_connected() — polls terminal_info().connected until True
+     before making any API call (fixes "Terminal: Call failed")
+  2. _find_real_symbol()        — searches broker's symbol list for the
+     correct name (handles suffixes like 'm', '.', '+', 'x', etc.)
+  3. _symbol_map                — stores config-name -> broker-name mapping
+     so every method is transparent to the caller
+"""
+
+import logging
+import time
+from typing import Dict, List, Optional
+
+import MetaTrader5 as mt5
+
+logger = logging.getLogger('AI-Trade')
+
+
+class MT5Executor:
+    def __init__(self, config: dict):
+        self._cfg        = config
+        self._exec_cfg   = config['execution']
+        self.connected   = False
+        self._symbol_map: Dict[str, str] = {}   # config name -> real broker name
+
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _actual(self, symbol: str) -> str:
+        """Translate config symbol name to the real broker name."""
+        return self._symbol_map.get(symbol, symbol)
+
+    def _wait_terminal_connected(self, timeout: int = 30) -> bool:
+        """
+        Block until terminal_info().connected is True.
+        Returns False if it never becomes True within `timeout` seconds.
+
+        This is required because mt5.initialize() succeeds as soon as the
+        terminal process is found, but the terminal may still be logging in
+        to the broker.  All data-feed calls fail with 'Terminal: Call failed'
+        until the broker handshake completes.
+        """
+        logger.info("Waiting for MT5 terminal to connect to broker...")
+        for elapsed in range(timeout):
+            info = mt5.terminal_info()
+            if info and info.connected:
+                logger.info(f"Terminal connected to broker (took {elapsed+1}s)")
+                return True
+            time.sleep(1)
+        logger.error(f"Terminal did not connect within {timeout}s")
+        return False
+
+    def _find_real_symbol(self, base: str) -> str:
+        """
+        Find the symbol name actually available on this broker.
+
+        Brokers append suffixes to symbol names (e.g. XAUUSDm, XAUUSD.,
+        EURUSD+, EURUSDpro).  We try:
+          1. Exact match
+          2. Starts-with match  (e.g. 'XAUUSD' matches 'XAUUSDm')
+          3. Contains match     (e.g. 'XAUUSD' matches 'fxXAUUSD')
+        """
+        # Exact
+        if mt5.symbol_info(base) is not None:
+            return base
+
+        all_symbols = mt5.symbols_get()
+        if not all_symbols:
+            return base
+
+        upper = base.upper()
+
+        # Starts-with (most common case — broker appends suffix)
+        for s in all_symbols:
+            if s.name.upper().startswith(upper):
+                logger.info(f"Symbol resolved: {base} -> {s.name}")
+                return s.name
+
+        # Contains
+        for s in all_symbols:
+            if upper in s.name.upper():
+                logger.info(f"Symbol resolved: {base} -> {s.name}")
+                return s.name
+
+        logger.warning(f"Symbol '{base}' not found on this broker — using as-is")
+        return base
+
+    # ── Connection ────────────────────────────────────────────────────────────
+
+    def connect(self) -> bool:
+        """
+        Connect to the MT5 terminal that is already running and logged in.
+        Waits until the terminal is fully connected to the broker before
+        subscribing symbols.
+        """
+        if not mt5.initialize():
+            logger.error(
+                f"MT5 initialize() failed: {mt5.last_error()} "
+                "— make sure MetaTrader 5 is open and logged in."
+            )
+            return False
+
+        # Wait for broker connection (the critical step)
+        if not self._wait_terminal_connected(timeout=30):
+            mt5.shutdown()
+            return False
+
+        # Resolve + subscribe all configured symbols
+        for sym in self._cfg['trading']['symbols']:
+            real = self._find_real_symbol(sym)
+            self._symbol_map[sym] = real
+            if mt5.symbol_select(real, True):
+                logger.info(f"Subscribed: {sym} -> '{real}'")
+            else:
+                logger.warning(
+                    f"symbol_select('{real}') failed: {mt5.last_error()}"
+                )
+
+        info = mt5.account_info()
+        if info is None:
+            logger.error(f"account_info() failed: {mt5.last_error()}")
+            mt5.shutdown()
+            return False
+
+        self.connected = True
+        logger.info(
+            f"MT5 ready | account={info.login} | "
+            f"balance={info.balance:.2f} {info.currency} | "
+            f"server={info.server} | leverage=1:{info.leverage}"
+        )
+        logger.info(f"Symbol map: {self._symbol_map}")
+        return True
+
+    def disconnect(self) -> None:
+        mt5.shutdown()
+        self.connected = False
+        logger.info("MT5 disconnected")
+
+    # ── Account & symbol info ─────────────────────────────────────────────────
+
+    def get_account_info(self):
+        info = mt5.account_info()
+        if info is None:
+            logger.warning(f"account_info failed: {mt5.last_error()}")
+        return info
+
+    def get_tick(self, symbol: str):
+        """Return the latest bid/ask tick for a symbol (using resolved broker name)."""
+        return mt5.symbol_info_tick(self._actual(symbol))
+
+    def get_symbol_info(self, symbol: str):
+        real = self._actual(symbol)
+        info = mt5.symbol_info(real)
+        if info is None:
+            logger.error(f"symbol_info('{real}') failed: {mt5.last_error()}")
+            return None
+        if not info.visible:
+            if not mt5.symbol_select(real, True):
+                logger.error(f"Cannot select '{real}' in MarketWatch")
+                return None
+            info = mt5.symbol_info(real)
+        return info
+
+    # ── OHLCV data ────────────────────────────────────────────────────────────
+
+    _TF_MAP = {
+        'M1':  mt5.TIMEFRAME_M1,  'M5':  mt5.TIMEFRAME_M5,
+        'M15': mt5.TIMEFRAME_M15, 'M30': mt5.TIMEFRAME_M30,
+        'H1':  mt5.TIMEFRAME_H1,  'H4':  mt5.TIMEFRAME_H4,
+        'D1':  mt5.TIMEFRAME_D1,
+    }
+
+    def get_ohlcv(self, symbol: str, timeframe_str: str, bars: int = 600):
+        real = self._actual(symbol)
+        tf   = self._TF_MAP.get(timeframe_str.upper(), mt5.TIMEFRAME_M15)
+
+        mt5.symbol_select(real, True)
+
+        for attempt in range(1, 4):
+            rates = mt5.copy_rates_from_pos(real, tf, 0, bars)
+            if rates is not None and len(rates) > 0:
+                return rates
+            logger.warning(
+                f"get_ohlcv('{real}') attempt {attempt}/3 failed: "
+                f"{mt5.last_error()} — retrying in 3s"
+            )
+            time.sleep(3)
+
+        logger.error(f"get_ohlcv('{real}'): all 3 attempts failed.")
+        return None
+
+    # ── Position queries ──────────────────────────────────────────────────────
+
+    def get_all_open_positions(self) -> List:
+        positions = mt5.positions_get()
+        return list(positions) if positions else []
+
+    def get_positions_for_symbol(self, symbol: str, magic: int) -> List:
+        real      = self._actual(symbol)
+        positions = mt5.positions_get(symbol=real)
+        if not positions:
+            return []
+        return [p for p in positions if p.magic == magic]
+
+    def symbol_has_position(self, symbol: str, magic: int) -> bool:
+        return len(self.get_positions_for_symbol(symbol, magic)) > 0
+
+    # ── Filling mode detection ────────────────────────────────────────────────
+
+    def _resolve_filling(self, symbol: str) -> int:
+        real = self._actual(symbol)
+        info = mt5.symbol_info(real)
+        if info is None:
+            return getattr(mt5, 'ORDER_FILLING_IOC', 1)
+
+        mode = info.filling_mode
+
+        # MT5 Python binding attribute names vary by package version — use
+        # getattr with the known integer fallbacks (spec: FOK=1, IOC=2).
+        SYM_FOK = getattr(mt5, 'SYMBOL_FILLING_FOK',    1)
+        SYM_IOC = getattr(mt5, 'SYMBOL_FILLING_IOC',    2)
+        ORD_FOK    = getattr(mt5, 'ORDER_FILLING_FOK',    0)
+        ORD_IOC    = getattr(mt5, 'ORDER_FILLING_IOC',    1)
+        ORD_RETURN = getattr(mt5, 'ORDER_FILLING_RETURN', 2)
+
+        if mode & SYM_IOC:
+            return ORD_IOC
+        if mode & SYM_FOK:
+            return ORD_FOK
+        return ORD_RETURN
+
+    # ── Order placement ───────────────────────────────────────────────────────
+
+    def place_market_order(
+        self,
+        symbol: str,
+        direction: str,
+        lot_size: float,
+        sl_price: float,
+        tp_price: float,
+        magic: int,
+        comment: str = '',
+    ) -> Optional[Dict]:
+        real       = self._actual(symbol)
+        is_buy     = direction.upper() == 'BUY'
+        order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
+        filling    = self._resolve_filling(symbol)
+        sym_info   = mt5.symbol_info(real)
+        digits     = sym_info.digits if sym_info else 5
+        deviation  = self._exec_cfg['deviation']
+
+        def _price() -> float:
+            tick = mt5.symbol_info_tick(real)
+            return (tick.ask if is_buy else tick.bid) if tick else 0.0
+
+        for attempt in range(1, self._exec_cfg['max_retries'] + 1):
+            price = _price()
+            if price == 0.0:
+                logger.error(f"{real}: cannot get tick (attempt {attempt})")
+                time.sleep(self._exec_cfg['retry_delay'])
+                continue
+
+            request = {
+                'action':       mt5.TRADE_ACTION_DEAL,
+                'symbol':       real,
+                'volume':       float(lot_size),
+                'type':         order_type,
+                'price':        price,
+                'sl':           round(sl_price, digits),
+                'tp':           round(tp_price, digits),
+                'deviation':    deviation,
+                'magic':        magic,
+                'comment':      comment[:31],
+                'type_time':    mt5.ORDER_TIME_GTC,
+                'type_filling': filling,
+            }
+
+            result = mt5.order_send(request)
+
+            if result is None:
+                logger.warning(f"{real}: order_send None (attempt {attempt}): {mt5.last_error()}")
+            elif result.retcode == mt5.TRADE_RETCODE_DONE:
+                logger.info(
+                    f"ORDER PLACED | {direction} {lot_size} {real} "
+                    f"@ {result.price:.5f} | SL={sl_price:.5f} TP={tp_price:.5f} "
+                    f"| ticket={result.order}"
+                )
+                return {
+                    'ticket':   result.order,
+                    'price':    result.price,
+                    'lot_size': lot_size,
+                    'sl_price': sl_price,
+                    'tp_price': tp_price,
+                }
+            elif result.retcode in (
+                mt5.TRADE_RETCODE_REQUOTE,
+                mt5.TRADE_RETCODE_PRICE_OFF,
+                mt5.TRADE_RETCODE_PRICE_CHANGED,
+            ):
+                logger.warning(f"{real}: requote (attempt {attempt}), retrying...")
+            else:
+                logger.error(
+                    f"{real}: order failed | retcode={result.retcode} "
+                    f"comment='{result.comment}' (attempt {attempt})"
+                )
+                break
+
+            if attempt < self._exec_cfg['max_retries']:
+                time.sleep(self._exec_cfg['retry_delay'])
+
+        logger.error(f"{real}: failed to place {direction} after {self._exec_cfg['max_retries']} attempts")
+        return None
+
+    # ── Position closure ──────────────────────────────────────────────────────
+
+    def close_position(self, position) -> bool:
+        is_long    = position.type == mt5.ORDER_TYPE_BUY
+        close_type = mt5.ORDER_TYPE_SELL if is_long else mt5.ORDER_TYPE_BUY
+        filling    = self._resolve_filling(position.symbol)
+        tick       = mt5.symbol_info_tick(position.symbol)
+        if tick is None:
+            logger.error(f"No tick for {position.symbol}")
+            return False
+
+        result = mt5.order_send({
+            'action':       mt5.TRADE_ACTION_DEAL,
+            'symbol':       position.symbol,
+            'volume':       position.volume,
+            'type':         close_type,
+            'position':     position.ticket,
+            'price':        tick.bid if is_long else tick.ask,
+            'deviation':    self._exec_cfg['deviation'],
+            'magic':        position.magic,
+            'comment':      'close',
+            'type_time':    mt5.ORDER_TIME_GTC,
+            'type_filling': filling,
+        })
+
+        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+            logger.info(f"CLOSED ticket={position.ticket} @ {result.price:.5f}")
+            return True
+
+        logger.error(
+            f"Failed to close ticket={position.ticket}: "
+            f"{mt5.last_error() if result is None else result.comment}"
+        )
+        return False
+
+    # ── Deal history ──────────────────────────────────────────────────────────
+
+    def get_closed_deals(self, from_ts: float, to_ts: float, magic: int) -> List:
+        deals = mt5.history_deals_get(from_ts, to_ts)
+        if not deals:
+            return []
+        return [d for d in deals if d.magic == magic and d.entry == mt5.DEAL_ENTRY_OUT]

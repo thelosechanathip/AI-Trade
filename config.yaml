@@ -1,0 +1,132 @@
+# ============================================================
+#  AI-Trade — Master Configuration
+# ============================================================
+
+trading:
+  symbols: ["XAUUSD"]
+  timeframe: "M15"
+  magic_number: 20240101
+
+risk:
+  risk_per_trade: 0.008
+  max_concurrent_trades: 3   # ลดจาก 5 → 3 ป้องกันเปิด 5 ไม้ผิดทางพร้อมกัน
+  max_daily_loss: 0.025
+  max_drawdown: 0.10
+  min_rr_ratio: 1.8
+  atr_sl_multiplier: 1.8
+  atr_tp_multiplier: 3.6
+  use_kelly: true
+  kelly_max_fraction: 0.020
+  dd_scale_start: 0.04
+  dd_scale_min: 0.35
+  max_loss_streak: 3
+  loss_streak_scale: 0.50
+  mode: "normal"
+  safe_risk_multiplier: 0.50
+  aggressive_risk_multiplier: 1.25
+
+strategy:
+  ema_fast: 50
+  ema_slow: 200
+  rsi_period: 14
+  rsi_buy_min:  45
+  rsi_buy_max:  75
+  rsi_sell_min: 25
+  rsi_sell_max: 55
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  atr_period: 14
+  atr_threshold_multiplier: 0.50
+  structure_lookback: 20
+  swing_strength: 5
+  min_confluence: 3          # เพิ่มจาก 2 → 3 (2/4 ง่ายเกิน)
+  adx_period: 14
+  adx_trend_threshold:    22
+  adx_range_threshold:    18
+  adx_high_vol_threshold: 42
+  bb_period: 20
+  bb_std: 2.0
+  stoch_k: 14
+  stoch_d: 3
+  stoch_smooth: 3
+  range_rsi_oversold:   33
+  range_rsi_overbought: 67
+  range_bb_pct_buy:  0.12
+  range_bb_pct_sell: 0.88
+  high_vol_sl_multiplier: 1.6
+  high_vol_size_scale:    0.65
+
+sessions:
+  enabled: false             # false = เทรด 24 ชั่วโมงตั้งแต่เปิด Program
+                              # true  = เฉพาะ London+NY เท่านั้น
+  london:
+    start: "07:00"
+    end:   "16:00"
+  new_york:
+    start: "12:00"
+    end:   "21:00"
+
+ai:
+  enabled: true
+  min_confidence: 62        # เพิ่มจาก 52 → 62 (52% แทบไม่กรอง)
+  model_type: "ensemble"
+  retrain_interval: 360
+  forward_bars: 12
+  target_move_pct: 0.0025
+  training_bars: 2000
+
+optimizer:
+  n_trials: 40
+  interval_cycles: 3
+
+trade_management:
+  breakeven_r:          1.0
+  breakeven_buffer_pts: 5
+  trailing_r:           1.5
+  trailing_atr_mult:    1.0
+  trailing_step_r:      0.5
+  partial_close: true
+  partial_close_stages:
+    - r: 1.0
+      pct: 0.30
+    - r: 2.0
+      pct: 0.30
+    - r: 3.0
+      pct: 0.40
+  time_exit_enabled: true
+  time_exit_bars:    48
+  time_exit_min_r:  -0.3
+  cooldown_minutes: 60       # ห่างระหว่างไม้บน symbol เดิมอย่างน้อย 60 นาที
+
+  news_filter_enabled: true  # หยุดเทรด 30 นาทีก่อน / 15 นาทีหลัง ข่าว High Impact
+  news_blackout_before: 30   # นาที ก่อนข่าว
+  news_blackout_after:  15   # นาที หลังข่าว
+  min_sl_points:    12.0
+  max_spread_gold:  15.0
+  max_spread_forex:  6.0
+
+execution:
+  max_retries: 3
+  retry_delay: 1
+  deviation:   20
+
+htf_filter:
+  enabled: true
+  timeframe: "H4"            # H4 = กรอง trend ใหญ่
+  ema_period: 200
+  bars: 250                  # ต้องการ 250 แท่ง H4 สำหรับ EMA200
+
+direction_ban:
+  enabled: true
+  max_same_dir_losses: 2     # แบน direction หลังแพ้ซ้อน 2 ครั้งในทิศเดียวกัน
+  ban_hours: 4               # แบน 4 ชั่วโมง
+
+dashboard:
+  refresh_interval: 5
+  port: 8001
+
+logging:
+  level: "DEBUG"
+  file: "logs/trading.log"
+  max_size_mb: 50

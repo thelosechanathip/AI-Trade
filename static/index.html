@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI-Trade Pro · XAUUSD</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    /* ── Design System (open-design inspired — Linear/Stripe dark) ──────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      /* Core palette */
+      --bg:        #09090b;
+      --surface:   #111113;
+      --panel:     #18181b;
+      --border:    #27272a;
+      --border-hi: #3f3f46;
+
+      /* Semantic colours */
+      --green:     #22c55e;
+      --green-dim: rgba(34,197,94,.12);
+      --red:       #ef4444;
+      --red-dim:   rgba(239,68,68,.12);
+      --blue:      #3b82f6;
+      --blue-dim:  rgba(59,130,246,.12);
+      --amber:     #f59e0b;
+      --amber-dim: rgba(245,158,11,.12);
+      --purple:    #a855f7;
+      --purple-dim:rgba(168,85,247,.12);
+      --cyan:      #06b6d4;
+      --cyan-dim:  rgba(6,182,212,.12);
+
+      /* Text */
+      --text:      #fafafa;
+      --text-2:    #a1a1aa;
+      --text-3:    #52525b;
+
+      /* Radius / shadow */
+      --r:   8px;
+      --r-lg: 12px;
+      --shadow: 0 1px 3px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
+    }
+
+    html { font-size: 13px; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, 'Inter', 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Scrollbar ───────────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
+
+    /* ── Header ──────────────────────────────────────────────────────────── */
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 20px; height: 52px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 100;
+    }
+    .logo {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; font-size: 1rem; letter-spacing: -.2px;
+    }
+    .logo-icon {
+      width: 28px; height: 28px; border-radius: 6px;
+      background: linear-gradient(135deg, var(--amber), var(--green));
+      display: flex; align-items: center; justify-content: center;
+      font-size: .9rem; font-weight: 800;
+    }
+    .logo-text { color: var(--text); }
+    .logo-sub  { color: var(--text-2); font-weight: 400; font-size: .85rem; margin-left: 4px; }
+
+    .header-center { display: flex; align-items: center; gap: 16px; }
+
+    .chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      font-size: .78rem; color: var(--text-2);
+    }
+    .chip.live   { border-color: rgba(34,197,94,.3); color: var(--green); }
+    .chip.dead   { border-color: rgba(239,68,68,.3);  color: var(--red); }
+
+    .dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: currentColor;
+    }
+    .dot.pulse { animation: pulse 2s infinite; }
+
+    @keyframes pulse {
+      0%,100% { opacity: 1; }
+      50%      { opacity: .4; }
+    }
+
+    .header-right { display: flex; align-items: center; gap: 12px; }
+    #clock { font-size: .8rem; color: var(--text-2); font-variant-numeric: tabular-nums; }
+    #regime-badge {
+      padding: 3px 10px; border-radius: 999px; font-size: .76rem; font-weight: 600;
+      border: 1px solid var(--border);
+    }
+
+    /* ── Layout ──────────────────────────────────────────────────────────── */
+    .wrap { max-width: 1600px; margin: 0 auto; padding: 16px 16px 40px; }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+    .grid-6 { display: grid; grid-template-columns: repeat(6,1fr); gap: 12px; }
+    @media (max-width:1300px) { .grid-6 { grid-template-columns: repeat(3,1fr); } }
+    @media (max-width: 900px) { .grid-6,.grid-4,.grid-3,.grid-2 { grid-template-columns: repeat(2,1fr); } }
+    @media (max-width: 560px) { .grid-6,.grid-4,.grid-3,.grid-2 { grid-template-columns: 1fr; } }
+
+    .row  { margin-bottom: 12px; }
+    .span2 { grid-column: span 2; }
+    .span3 { grid-column: span 3; }
+
+    /* ── Card ────────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      padding: 14px 16px;
+      box-shadow: var(--shadow);
+    }
+    .card-head {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .card-title {
+      font-size: .72rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .8px;
+      color: var(--text-2);
+    }
+    .card-badge {
+      font-size: .7rem; padding: 2px 7px; border-radius: 4px;
+      background: var(--border); color: var(--text-2);
+    }
+
+    /* ── KPI ─────────────────────────────────────────────────────────────── */
+    .kpi { padding: 14px 16px; border-radius: var(--r-lg); position: relative; overflow: hidden; }
+    .kpi::after {
+      content: ''; position: absolute; top: 0; left: 0;
+      width: 100%; height: 2px;
+      background: var(--kpi-color, var(--blue));
+      opacity: .6;
+    }
+    .kpi-label {
+      font-size: .7rem; font-weight: 500; text-transform: uppercase;
+      letter-spacing: .7px; color: var(--text-2); margin-bottom: 8px;
+    }
+    .kpi-val {
+      font-size: 1.5rem; font-weight: 700;
+      font-variant-numeric: tabular-nums; color: var(--text);
+      line-height: 1.1;
+    }
+    .kpi-sub {
+      font-size: .75rem; color: var(--text-2);
+      margin-top: 4px; font-variant-numeric: tabular-nums;
+    }
+    .kpi-sub.pos { color: var(--green); }
+    .kpi-sub.neg { color: var(--red); }
+
+    /* ── Gauge / Score bar ───────────────────────────────────────────────── */
+    .bar-track {
+      height: 4px; border-radius: 2px;
+      background: var(--border); margin: 8px 0 4px; overflow: hidden;
+    }
+    .bar-fill { height: 100%; border-radius: 2px; transition: width .4s ease; }
+
+    /* ── Indicators strip ────────────────────────────────────────────────── */
+    .ind-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 0; border-bottom: 1px solid var(--border);
+      font-size: .82rem;
+    }
+    .ind-row:last-child { border-bottom: none; }
+    .ind-name { color: var(--text-2); min-width: 80px; }
+    .ind-val  { font-variant-numeric: tabular-nums; font-weight: 600; }
+    .ind-pill {
+      font-size: .7rem; padding: 1px 7px; border-radius: 4px;
+      font-weight: 600; letter-spacing: .3px;
+    }
+    .bull { background: var(--green-dim); color: var(--green); }
+    .bear { background: var(--red-dim);   color: var(--red); }
+    .neut { background: var(--border);    color: var(--text-2); }
+
+    /* ── AI bias display ─────────────────────────────────────────────────── */
+    .bias-display {
+      display: flex; align-items: center; gap: 14px;
+      padding: 14px 0 10px;
+    }
+    .bias-icon {
+      width: 48px; height: 48px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.3rem; flex-shrink: 0;
+    }
+    .bias-icon.bull { background: var(--green-dim); }
+    .bias-icon.bear { background: var(--red-dim); }
+    .bias-icon.neut { background: var(--border); }
+    .bias-label {
+      font-size: 1.1rem; font-weight: 700; line-height: 1;
+      text-transform: capitalize;
+    }
+    .bias-conf { font-size: .8rem; color: var(--text-2); margin-top: 3px; }
+
+    /* ── Ensemble breakdown ──────────────────────────────────────────────── */
+    .model-row {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 6px; font-size: .79rem;
+    }
+    .model-name { width: 76px; color: var(--text-2); flex-shrink: 0; }
+    .model-bar-wrap { flex: 1; }
+    .model-prob { width: 38px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .model-weight { width: 30px; text-align: right; font-size: .7rem; color: var(--text-3); }
+
+    /* ── Memory / RL panels ──────────────────────────────────────────────── */
+    .learn-stat {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 10px; border-radius: 6px;
+      background: var(--surface); margin-bottom: 5px;
+      font-size: .8rem;
+    }
+    .learn-stat:last-child { margin-bottom: 0; }
+    .ls-label { color: var(--text-2); }
+    .ls-val   { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    /* ── Positions table ─────────────────────────────────────────────────── */
+    .tbl { width: 100%; border-collapse: collapse; font-size: .8rem; }
+    .tbl th {
+      text-align: left; padding: 7px 10px;
+      font-size: .68rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .6px; color: var(--text-3);
+      border-bottom: 1px solid var(--border);
+    }
+    .tbl td { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,.04); }
+    .tbl tr:last-child td { border-bottom: none; }
+    .tbl tr:hover td { background: rgba(255,255,255,.02); }
+    .dir-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px; border-radius: 4px; font-size: .72rem; font-weight: 700;
+    }
+
+    /* ── Activity log ────────────────────────────────────────────────────── */
+    .act-wrap { max-height: 220px; overflow-y: auto; }
+    .act-item {
+      display: flex; gap: 10px; padding: 7px 0;
+      border-bottom: 1px solid rgba(255,255,255,.04);
+      font-size: .79rem;
+    }
+    .act-item:last-child { border-bottom: none; }
+    .act-ts   { color: var(--text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .act-sym  { color: var(--amber); min-width: 68px; font-weight: 600; }
+    .act-msg  { color: var(--text-2); line-height: 1.4; }
+    .act-msg.type-OPEN  { color: var(--green); }
+    .act-msg.type-CLOSE { color: var(--text-2); }
+    .act-msg.type-WARN  { color: var(--amber); }
+    .act-msg.type-ERROR { color: var(--red); }
+
+    /* ── Chart containers ────────────────────────────────────────────────── */
+    .chart-wrap { position: relative; height: 160px; }
+    .chart-wrap-sm { position: relative; height: 100px; }
+
+    /* ── Section divider ─────────────────────────────────────────────────── */
+    .section-label {
+      font-size: .68rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .9px; color: var(--text-3);
+      margin: 16px 0 8px; display: flex; align-items: center; gap: 8px;
+    }
+    .section-label::after {
+      content: ''; flex: 1; height: 1px; background: var(--border);
+    }
+
+    /* ── Memory match indicator ──────────────────────────────────────────── */
+    .mem-dots { display: flex; gap: 3px; flex-wrap: wrap; }
+    .mem-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--border);
+    }
+    .mem-dot.win  { background: var(--green); }
+    .mem-dot.loss { background: var(--red); }
+
+    /* ── Confidence arc ──────────────────────────────────────────────────── */
+    .conf-arc-wrap {
+      display: flex; flex-direction: column; align-items: center; padding: 4px 0;
+    }
+    .conf-arc-val {
+      font-size: 2rem; font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+    .conf-arc-label { font-size: .72rem; color: var(--text-2); margin-top: 2px; }
+
+    /* ── Progress ring ───────────────────────────────────────────────────── */
+    .ring-wrap { position: relative; width: 56px; height: 56px; flex-shrink: 0; }
+    .ring-wrap svg { transform: rotate(-90deg); }
+    .ring-wrap .ring-val {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: .8rem; font-weight: 700;
+    }
+
+    /* ── Learning progress bar ───────────────────────────────────────────── */
+    .lp-label {
+      display: flex; justify-content: space-between;
+      font-size: .75rem; margin-bottom: 4px;
+    }
+    .lp-bar-track {
+      height: 6px; border-radius: 3px;
+      background: var(--border); overflow: hidden; margin-bottom: 10px;
+    }
+    .lp-bar-fill { height: 100%; border-radius: 3px; transition: width .6s ease; }
+
+    /* ── Tooltip ─────────────────────────────────────────────────────────── */
+    [title] { cursor: help; }
+
+    /* ── Fade-in anim ────────────────────────────────────────────────────── */
+    @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
+    .card, .kpi { animation: fadeIn .3s ease; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">G</div>
+    <span class="logo-text">AI-Trade</span>
+    <span class="logo-sub">XAUUSD Pro</span>
+  </div>
+
+  <div class="header-center">
+    <div class="chip" id="conn-chip">
+      <span class="dot" id="conn-dot"></span>
+      <span id="conn-label">Connecting…</span>
+    </div>
+    <div id="regime-badge" class="chip">— REGIME</div>
+  </div>
+
+  <div class="header-right">
+    <span id="clock">—</span>
+  </div>
+</header>
+
+<!-- ── Main ────────────────────────────────────────────────────────────────── -->
+<div class="wrap">
+
+  <!-- KPI Row -->
+  <div class="row grid-6">
+    <div class="card kpi" style="--kpi-color:var(--blue)">
+      <div class="kpi-label">Balance</div>
+      <div class="kpi-val" id="k-balance">—</div>
+      <div class="kpi-sub" id="k-balance-sub">—</div>
+    </div>
+    <div class="card kpi" style="--kpi-color:var(--green)">
+      <div class="kpi-label">Equity</div>
+      <div class="kpi-val" id="k-equity">—</div>
+      <div class="kpi-sub" id="k-equity-sub">—</div>
+    </div>
+    <div class="card kpi" style="--kpi-color:var(--amber)">
+      <div class="kpi-label">Today P&amp;L</div>
+      <div class="kpi-val" id="k-pnl">—</div>
+      <div class="kpi-sub" id="k-pnl-sub">—</div>
+    </div>
+    <div class="card kpi" style="--kpi-color:var(--purple)">
+      <div class="kpi-label">Win Rate</div>
+      <div class="kpi-val" id="k-wr">—</div>
+      <div class="kpi-sub" id="k-wr-sub">—</div>
+    </div>
+    <div class="card kpi" style="--kpi-color:var(--cyan)">
+      <div class="kpi-label">Open Trades</div>
+      <div class="kpi-val" id="k-open">0</div>
+      <div class="kpi-sub" id="k-open-sub">—</div>
+    </div>
+    <div class="card kpi" style="--kpi-color:var(--red)">
+      <div class="kpi-label">Drawdown</div>
+      <div class="kpi-val" id="k-dd">—</div>
+      <div class="kpi-sub" id="k-dd-sub">—</div>
+    </div>
+  </div>
+
+  <!-- Row 2: Equity chart + AI Status + Indicators -->
+  <div class="row" style="display:grid;grid-template-columns:2fr 1.2fr 1fr;gap:12px;">
+
+    <!-- Equity Chart -->
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Equity Curve</span>
+        <span class="card-badge" id="eq-last">—</span>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="eqChart"></canvas>
+      </div>
+    </div>
+
+    <!-- AI Status -->
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">AI Signal</span>
+        <span class="card-badge" id="ai-thresh">thr —</span>
+      </div>
+
+      <div class="bias-display">
+        <div class="bias-icon neut" id="bias-icon">—</div>
+        <div>
+          <div class="bias-label" id="bias-label">Neutral</div>
+          <div class="bias-conf" id="bias-conf">Confidence: —</div>
+        </div>
+        <div style="margin-left:auto;">
+          <div class="conf-arc-wrap">
+            <div class="conf-arc-val" id="conf-big">—</div>
+            <div class="conf-arc-label">Score</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Model ensemble breakdown -->
+      <div style="margin-top:8px;">
+        <div class="model-row">
+          <span class="model-name">Tabular</span>
+          <div class="model-bar-wrap">
+            <div class="bar-track"><div class="bar-fill" id="bar-tab" style="width:50%;background:var(--blue)"></div></div>
+          </div>
+          <span class="model-prob" id="prob-tab">—</span>
+        </div>
+        <div class="model-row">
+          <span class="model-name">LSTM</span>
+          <div class="model-bar-wrap">
+            <div class="bar-track"><div class="bar-fill" id="bar-lstm" style="width:50%;background:var(--purple)"></div></div>
+          </div>
+          <span class="model-prob" id="prob-lstm">—</span>
+        </div>
+        <div class="model-row">
+          <span class="model-name">Regime</span>
+          <div class="model-bar-wrap">
+            <div class="bar-track"><div class="bar-fill" id="bar-reg" style="width:50%;background:var(--cyan)"></div></div>
+          </div>
+          <span class="model-prob" id="prob-reg">—</span>
+        </div>
+        <div class="model-row">
+          <span class="model-name" title="Reinforcement Learning DQN">RL DQN</span>
+          <div class="model-bar-wrap">
+            <div class="bar-track"><div class="bar-fill" id="bar-rl" style="width:50%;background:var(--amber)"></div></div>
+          </div>
+          <span class="model-prob" id="prob-rl">—</span>
+        </div>
+        <div class="model-row">
+          <span class="model-name" title="Online SGD incremental">Online</span>
+          <div class="model-bar-wrap">
+            <div class="bar-track"><div class="bar-fill" id="bar-online" style="width:50%;background:var(--green)"></div></div>
+          </div>
+          <span class="model-prob" id="prob-online">—</span>
+        </div>
+        <div class="model-row">
+          <span class="model-name" title="Pattern memory boost">Memory</span>
+          <div class="model-bar-wrap">
+            <div class="bar-track"><div class="bar-fill" id="bar-mem" style="width:0%;background:var(--purple)"></div></div>
+          </div>
+          <span class="model-prob" id="prob-mem">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Indicators -->
+    <div class="card">
+      <div class="card-head"><span class="card-title">Indicators</span></div>
+      <div class="ind-row">
+        <span class="ind-name">ADX</span>
+        <span class="ind-val" id="i-adx">—</span>
+        <span class="ind-pill neut" id="p-adx">—</span>
+      </div>
+      <div class="ind-row">
+        <span class="ind-name">RSI (14)</span>
+        <span class="ind-val" id="i-rsi">—</span>
+        <span class="ind-pill neut" id="p-rsi">—</span>
+      </div>
+      <div class="ind-row">
+        <span class="ind-name">MACD</span>
+        <span class="ind-val" id="i-macd">—</span>
+        <span class="ind-pill neut" id="p-macd">—</span>
+      </div>
+      <div class="ind-row">
+        <span class="ind-name">EMA50</span>
+        <span class="ind-val" id="i-e50">—</span>
+        <span class="ind-pill neut" id="p-e50">—</span>
+      </div>
+      <div class="ind-row">
+        <span class="ind-name">EMA200</span>
+        <span class="ind-val" id="i-e200">—</span>
+        <span class="ind-pill neut" id="p-e200">—</span>
+      </div>
+      <div class="ind-row">
+        <span class="ind-name">Stoch K</span>
+        <span class="ind-val" id="i-stk">—</span>
+        <span class="ind-pill neut" id="p-stk">—</span>
+      </div>
+      <div class="ind-row">
+        <span class="ind-name">Spread</span>
+        <span class="ind-val" id="i-spread">—</span>
+        <span class="ind-pill neut" id="p-spread">—</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 3: AI Learning Intelligence -->
+  <div class="section-label">AI Learning Intelligence</div>
+  <div class="row" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;">
+
+    <!-- RL Agent Status -->
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">RL DQN Agent</span>
+        <span class="card-badge" id="rl-backend">—</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">Training steps</span>
+        <span class="ls-val" id="rl-steps">—</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">Trade outcomes</span>
+        <span class="ls-val" id="rl-outcomes">—</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">Action accuracy</span>
+        <span class="ls-val" id="rl-acc">—</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">Current weight</span>
+        <span class="ls-val" id="rl-weight">—</span>
+      </div>
+      <div style="margin-top:10px;">
+        <div class="lp-label">
+          <span style="color:var(--text-2)">Exploration ε</span>
+          <span id="rl-eps">—</span>
+        </div>
+        <div class="lp-bar-track">
+          <div class="lp-bar-fill" id="rl-eps-bar" style="width:90%;background:var(--amber)"></div>
+        </div>
+        <div class="lp-label">
+          <span style="color:var(--text-2)">Ensemble weight</span>
+          <span id="rl-w-pct">—</span>
+        </div>
+        <div class="lp-bar-track">
+          <div class="lp-bar-fill" id="rl-w-bar" style="width:0%;background:var(--green)"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Market Memory -->
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Pattern Memory</span>
+        <span class="card-badge" id="mem-size">0 patterns</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">Memory win rate</span>
+        <span class="ls-val" id="mem-wr">—</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">Avg profit</span>
+        <span class="ls-val" id="mem-avg">—</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">Current matches</span>
+        <span class="ls-val" id="mem-matches">—</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">Confidence boost</span>
+        <span class="ls-val" id="mem-boost">—</span>
+      </div>
+      <div style="margin-top:10px;">
+        <div style="font-size:.72rem;color:var(--text-2);margin-bottom:5px;">Last 10 recalled patterns</div>
+        <div class="mem-dots" id="mem-dots"></div>
+      </div>
+    </div>
+
+    <!-- Online Learning -->
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Online Learning</span>
+        <span class="card-badge" id="ol-badge">SGD</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">SGD updates</span>
+        <span class="ls-val" id="ol-updates">—</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">SGD accuracy</span>
+        <span class="ls-val" id="ol-acc">—</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">SGD weight</span>
+        <span class="ls-val" id="ol-weight">—</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">Feedback buffer</span>
+        <span class="ls-val" id="ol-buf">—</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">Retraining</span>
+        <span class="ls-val" id="retrain-in">—</span>
+      </div>
+    </div>
+
+    <!-- Confidence Tracker -->
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Confidence Tracker</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">Dynamic threshold</span>
+        <span class="ls-val" id="ct-thresh">—</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">Final bull prob</span>
+        <span class="ls-val" id="ct-bull">—</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">Variance penalty</span>
+        <span class="ls-val" id="ct-var">—</span>
+      </div>
+      <div class="learn-stat">
+        <span class="ls-label">Regime models</span>
+        <span class="ls-val" id="ct-regime">—</span>
+      </div>
+      <div style="margin-top:10px;">
+        <div class="lp-label">
+          <span style="color:var(--text-2)">Bull probability</span>
+          <span id="bull-pct">—</span>
+        </div>
+        <div class="lp-bar-track">
+          <div class="lp-bar-fill" id="bull-bar" style="width:50%;background:var(--blue)"></div>
+        </div>
+        <div style="font-size:.7rem;color:var(--text-2)" id="ct-summary">—</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Row 4: Open Positions + Activity -->
+  <div class="row grid-2">
+
+    <!-- Open Positions -->
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Open Positions</span>
+        <span class="card-badge" id="pos-count">0</span>
+      </div>
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Dir</th>
+            <th>Ticket</th>
+            <th>Lot</th>
+            <th>Entry</th>
+            <th>SL</th>
+            <th>TP</th>
+            <th>AI%</th>
+            <th>P&amp;L</th>
+          </tr>
+        </thead>
+        <tbody id="pos-body">
+          <tr><td colspan="8" style="color:var(--text-3);text-align:center;padding:20px 0">No open positions</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Activity Log -->
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Activity Log</span>
+        <span class="card-badge" id="act-count">0</span>
+      </div>
+      <div class="act-wrap">
+        <div id="act-list"></div>
+      </div>
+    </div>
+
+  </div>
+
+</div><!-- /wrap -->
+
+<script>
+// ── Utilities ──────────────────────────────────────────────────────────────────
+const $  = id => document.getElementById(id);
+const fmt = (v, d=2) => v == null ? '—' : Number(v).toLocaleString('en', {minimumFractionDigits:d, maximumFractionDigits:d});
+const pct = v => v == null ? '—' : (v*100).toFixed(1)+'%';
+
+function fmtPrice(v) { return v == null ? '—' : Number(v).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function fmtProfit(v) {
+  if (v == null) return '—';
+  const n = Number(v);
+  const s = (n >= 0 ? '+' : '') + n.toFixed(2);
+  return `<span style="color:${n>=0?'var(--green)':'var(--red)'}">${s}</span>`;
+}
+
+function pill(text, cls) { return `<span class="ind-pill ${cls}">${text}</span>`; }
+
+function setBar(id, frac, color) {
+  const el = $(id);
+  if (!el) return;
+  const pctVal = Math.max(0, Math.min(100, frac * 100)).toFixed(1);
+  el.style.width = pctVal + '%';
+  if (color) el.style.background = color;
+}
+
+// ── Clock ─────────────────────────────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  $('clock').textContent = now.toUTCString().slice(17,25) + ' UTC';
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Equity Chart ──────────────────────────────────────────────────────────────
+const eqCtx = $('eqChart').getContext('2d');
+const eqChart = new Chart(eqCtx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [{
+      label: 'Balance',
+      data: [], borderColor: 'var(--blue)', borderWidth: 1.5,
+      pointRadius: 0, tension: 0.3, fill: false,
+    },{
+      label: 'Equity',
+      data: [], borderColor: 'var(--green)', borderWidth: 1.5,
+      pointRadius: 0, tension: 0.3,
+      fill: { target: 'origin', above: 'rgba(34,197,94,.06)', below: 'rgba(239,68,68,.06)' },
+    }],
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
+    scales: {
+      x: { display: false },
+      y: {
+        grid: { color: 'rgba(255,255,255,.04)', drawBorder: false },
+        ticks: { color: 'var(--text-2)', font: { size: 10 }, maxTicksLimit: 5,
+                 callback: v => '$'+v.toLocaleString() },
+      },
+    },
+  },
+});
+
+// ── Connection + WebSocket ─────────────────────────────────────────────────────
+let ws, retryDelay = 2000;
+
+function setConn(live) {
+  const dot  = $('conn-dot');
+  const chip = $('conn-chip');
+  const lbl  = $('conn-label');
+  if (live) {
+    dot.classList.add('pulse');
+    chip.className = 'chip live';
+    lbl.textContent = 'Live';
+  } else {
+    dot.classList.remove('pulse');
+    chip.className = 'chip dead';
+    lbl.textContent = 'Disconnected';
+  }
+}
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen  = () => { setConn(true); retryDelay = 2000; };
+  ws.onclose = () => { setConn(false); setTimeout(connect, retryDelay); retryDelay = Math.min(retryDelay*2, 30000); };
+  ws.onerror = () => ws.close();
+  ws.onmessage = e => { try { render(JSON.parse(e.data)); } catch(_) {} };
+}
+
+// ── Main render ────────────────────────────────────────────────────────────────
+let _lastBalPrev = null;
+
+function render(d) {
+  renderKPI(d);
+  renderEquity(d);
+  renderSignal(d);
+  renderIndicators(d);
+  renderRegime(d);
+  renderAIInsights(d);
+  renderPositions(d);
+  renderActivity(d);
+}
+
+// ── KPIs ──────────────────────────────────────────────────────────────────────
+function renderKPI(d) {
+  const sym = d.symbols ? Object.keys(d.symbols)[0] : null;
+  const sd  = sym ? d.symbols[sym] : {};
+
+  const bal = d.balance || 0;
+  const eq  = d.equity  || 0;
+  const dd  = d.drawdown_pct || 0;
+
+  $('k-balance').textContent = '$' + fmt(bal, 2);
+  $('k-equity').textContent  = '$' + fmt(eq,  2);
+
+  const eqChg = bal > 0 ? ((eq - bal) / bal * 100) : 0;
+  $('k-equity-sub').innerHTML = fmtProfit(eq - bal) + ` (${eqChg.toFixed(2)}%)`;
+  $('k-equity-sub').className = 'kpi-sub ' + (eqChg >= 0 ? 'pos' : 'neg');
+
+  const stats = d.stats || {};
+  $('k-pnl').textContent    = (stats.today_pnl >= 0 ? '+' : '') + fmt(stats.today_pnl ?? 0, 2);
+  $('k-pnl').style.color    = stats.today_pnl >= 0 ? 'var(--green)' : 'var(--red)';
+  $('k-pnl-sub').textContent = `${stats.total_trades ?? 0} trades today`;
+
+  const wr = stats.win_rate ?? 0;
+  $('k-wr').textContent   = (wr * 100).toFixed(1) + '%';
+  $('k-wr').style.color   = wr >= 0.55 ? 'var(--green)' : wr >= 0.45 ? 'var(--amber)' : 'var(--red)';
+  $('k-wr-sub').textContent = `${stats.wins ?? 0}W / ${stats.losses ?? 0}L`;
+
+  const open = d.open_trades?.length ?? 0;
+  $('k-open').textContent   = open;
+  $('k-open-sub').textContent = open > 0 ? 'positions active' : 'no open trades';
+
+  $('k-dd').textContent  = dd.toFixed(2) + '%';
+  $('k-dd').style.color  = dd < 3 ? 'var(--green)' : dd < 7 ? 'var(--amber)' : 'var(--red)';
+  $('k-dd-sub').textContent = `Peak: $${fmt(d.peak_balance ?? 0, 0)}`;
+  $('k-balance-sub').textContent = `Initial: $${fmt(d.initial_balance ?? 0, 0)}`;
+}
+
+// ── Equity chart ──────────────────────────────────────────────────────────────
+function renderEquity(d) {
+  const rows = d.equity_recent || [];
+  if (!rows.length) return;
+
+  const labels = rows.map(r => r.ts ? r.ts.slice(11,16) : '');
+  const bals   = rows.map(r => r.balance);
+  const eqs    = rows.map(r => r.equity);
+
+  eqChart.data.labels       = labels;
+  eqChart.data.datasets[0].data = bals;
+  eqChart.data.datasets[1].data = eqs;
+  eqChart.update('none');
+
+  const last = rows[rows.length - 1];
+  $('eq-last').textContent = last ? '$' + fmt(last.equity, 2) : '—';
+}
+
+// ── AI Signal ─────────────────────────────────────────────────────────────────
+function renderSignal(d) {
+  const sym = d.symbols ? Object.keys(d.symbols)[0] : null;
+  const sd  = sym ? d.symbols[sym] : {};
+
+  const bias = (sd.ai_bias || 'neutral').toLowerCase();
+  const conf = sd.ai_confidence ?? 0;
+
+  const icon  = $('bias-icon');
+  const label = $('bias-label');
+  const confEl = $('bias-conf');
+  const confBig = $('conf-big');
+
+  label.textContent = bias.charAt(0).toUpperCase() + bias.slice(1);
+  confEl.textContent = `Confidence: ${conf}%`;
+  confBig.textContent = conf || '—';
+
+  icon.className = 'bias-icon ' + (bias==='bullish' ? 'bull' : bias==='bearish' ? 'bear' : 'neut');
+  icon.textContent = bias==='bullish' ? '▲' : bias==='bearish' ? '▼' : '—';
+  confBig.style.color = bias==='bullish' ? 'var(--green)' : bias==='bearish' ? 'var(--red)' : 'var(--text-2)';
+}
+
+// ── Indicators ────────────────────────────────────────────────────────────────
+function renderIndicators(d) {
+  const sym = d.symbols ? Object.keys(d.symbols)[0] : null;
+  const sd  = sym ? d.symbols[sym] : {};
+
+  const adx   = sd.adx   ?? null;
+  const rsi   = sd.rsi   ?? null;
+  const macd  = sd.macd_hist ?? null;
+  const e50   = sd.ema50  ?? null;
+  const e200  = sd.ema200 ?? null;
+  const stk   = sd.stoch_k ?? null;
+  const close = sd.close  ?? null;
+  const spread= sd.spread ?? null;
+
+  $('i-adx').textContent  = adx  != null ? adx.toFixed(1) : '—';
+  $('i-rsi').textContent  = rsi  != null ? rsi.toFixed(1) : '—';
+  $('i-macd').textContent = macd != null ? macd.toFixed(4) : '—';
+  $('i-e50').textContent  = e50  != null ? fmtPrice(e50)  : '—';
+  $('i-e200').textContent = e200 != null ? fmtPrice(e200) : '—';
+  $('i-stk').textContent  = stk  != null ? stk.toFixed(1) : '—';
+  $('i-spread').textContent = spread != null ? spread.toFixed(1) : '—';
+
+  $('p-adx').className  = 'ind-pill ' + (adx != null ? (adx>=40?'bear':adx>=25?'bull':'neut') : 'neut');
+  $('p-adx').textContent = adx != null ? (adx>=40?'HIGH':adx>=25?'TREND':'RANGE') : '—';
+
+  $('p-rsi').className  = 'ind-pill ' + (rsi != null ? (rsi>=70?'bear':rsi<=30?'bull':rsi>=55?'bull':'neut') : 'neut');
+  $('p-rsi').textContent = rsi != null ? (rsi>=70?'OB':rsi<=30?'OS':rsi>=55?'Bull':'Neut') : '—';
+
+  const macdBull = macd != null && macd > 0;
+  $('p-macd').className  = 'ind-pill ' + (macd != null ? (macdBull?'bull':'bear') : 'neut');
+  $('p-macd').textContent = macd != null ? (macdBull?'Bull':'Bear') : '—';
+
+  const aboveE50 = close != null && e50 != null && close > e50;
+  $('p-e50').className  = 'ind-pill ' + (close!=null ? (aboveE50?'bull':'bear') : 'neut');
+  $('p-e50').textContent = close!=null ? (aboveE50?'Above':'Below') : '—';
+
+  const aboveE200 = close != null && e200 != null && close > e200;
+  $('p-e200').className  = 'ind-pill ' + (close!=null ? (aboveE200?'bull':'bear') : 'neut');
+  $('p-e200').textContent = close!=null ? (aboveE200?'Above':'Below') : '—';
+
+  $('p-stk').className  = 'ind-pill ' + (stk!=null ? (stk>80?'bear':stk<20?'bull':'neut') : 'neut');
+  $('p-stk').textContent = stk!=null ? (stk>80?'OB':stk<20?'OS':'Mid') : '—';
+
+  $('p-spread').className  = 'ind-pill ' + (spread!=null ? (spread<3?'bull':spread<6?'neut':'bear') : 'neut');
+  $('p-spread').textContent = spread!=null ? (spread<3?'Low':spread<6?'Med':'High') : '—';
+}
+
+// ── Regime badge ──────────────────────────────────────────────────────────────
+function renderRegime(d) {
+  const sym = d.symbols ? Object.keys(d.symbols)[0] : null;
+  const regime = (sym ? d.symbols[sym]?.regime : null) || (d.regime) || '—';
+  const badge = $('regime-badge');
+
+  const regColors = { TREND: 'var(--green)', RANGE: 'var(--cyan)', HIGH_VOL: 'var(--red)' };
+  badge.textContent = regime;
+  badge.style.borderColor = regColors[regime] ? regColors[regime].replace(')',', .4)').replace('var(','rgba(') : '';
+  badge.style.color = regColors[regime] || 'var(--text-2)';
+}
+
+// ── AI Insights (RL + Memory + Ensemble) ──────────────────────────────────────
+function renderAIInsights(d) {
+  const ins = d.ai_insights || {};
+  const ls  = d.learning_stats || {};
+
+  // Ensemble breakdown bars
+  function barProb(barId, probId, val, color) {
+    const frac = val != null ? Math.abs(val - 0.5) / 0.5 * (val > 0.5 ? 1 : -1) : 0;
+    const w    = val != null ? val : 0.5;
+    setBar(barId, w, val != null ? (val > 0.5 ? 'var(--green)' : 'var(--red)') : color);
+    $(probId).textContent = val != null ? (val*100).toFixed(0)+'%' : '—';
+    $(probId).style.color = val != null ? (val > 0.52 ? 'var(--green)' : val < 0.48 ? 'var(--red)' : 'var(--text-2)') : 'var(--text-2)';
+  }
+
+  barProb('bar-tab',    'prob-tab',    ins.tab_prob,     'var(--blue)');
+  barProb('bar-lstm',   'prob-lstm',   ins.lstm_prob != null && ins.lstm_prob > 0 ? ins.lstm_prob : null, 'var(--purple)');
+  barProb('bar-reg',    'prob-reg',    ins.regime_prob,  'var(--cyan)');
+  barProb('bar-rl',     'prob-rl',     ins.rl_prob,      'var(--amber)');
+  barProb('bar-online', 'prob-online', ins.online_prob,  'var(--green)');
+
+  // Memory boost bar (different scale — boost is 0 to ±0.10)
+  const memBoost = ins.mem_boost ?? 0;
+  const memBullW = 0.5 + memBoost;  // center at 50%
+  setBar('bar-mem', Math.max(0, Math.min(1, memBullW)), memBoost > 0 ? 'var(--green)' : 'var(--red)');
+  $('prob-mem').textContent = memBoost != null ? (memBoost > 0 ? '+' : '') + (memBoost*100).toFixed(1)+'%' : '—';
+  $('prob-mem').style.color = memBoost > 0 ? 'var(--green)' : memBoost < 0 ? 'var(--red)' : 'var(--text-2)';
+
+  // AI threshold
+  $('ai-thresh').textContent = ins.threshold ? 'thr ' + (ins.threshold*100).toFixed(0)+'%' : 'thr —';
+
+  // ── RL Agent panel ─────────────────────────────────────────────────────────
+  const rl = ins.rl_status || ls.rl || {};
+  $('rl-backend').textContent  = rl.backend || '—';
+  $('rl-steps').textContent    = (rl.step || 0).toLocaleString();
+  $('rl-outcomes').textContent = (rl.n_outcomes || 0).toLocaleString();
+  $('rl-acc').textContent      = rl.accuracy != null ? (rl.accuracy*100).toFixed(1)+'%' : '—';
+  $('rl-acc').style.color      = rl.accuracy != null ? (rl.accuracy>=0.55?'var(--green)':rl.accuracy>=0.48?'var(--amber)':'var(--red)') : '';
+  $('rl-weight').textContent   = rl.weight   != null ? (rl.weight*100).toFixed(1)+'%' : '—';
+
+  const eps = rl.epsilon ?? 0.9;
+  $('rl-eps').textContent   = (eps*100).toFixed(0)+'%';
+  setBar('rl-eps-bar', eps, eps > 0.5 ? 'var(--amber)' : 'var(--green)');
+
+  const wPct = rl.weight ?? 0;
+  $('rl-w-pct').textContent = (wPct*100).toFixed(1)+'%';
+  setBar('rl-w-bar', wPct / 0.20, 'var(--green)');
+
+  // ── Pattern Memory panel ────────────────────────────────────────────────────
+  const memStats = ls.memory || {};
+  $('mem-size').textContent = (ins.memory_size || memStats.total || 0) + ' patterns';
+  $('mem-wr').textContent   = memStats.win_rate != null ? (memStats.win_rate*100).toFixed(1)+'%' : '—';
+  $('mem-wr').style.color   = memStats.win_rate != null ? (memStats.win_rate>=0.55?'var(--green)':memStats.win_rate>=0.48?'var(--amber)':'var(--red)') : '';
+  $('mem-avg').textContent  = memStats.avg_profit != null ? (memStats.avg_profit>=0?'+':'')+memStats.avg_profit.toFixed(2) : '—';
+  $('mem-avg').style.color  = memStats.avg_profit >= 0 ? 'var(--green)' : 'var(--red)';
+  $('mem-matches').textContent = ins.mem_n != null ? ins.mem_n + ' found' : '—';
+  $('mem-boost').textContent   = ins.mem_boost != null ? (ins.mem_boost>=0?'+':'')+( ins.mem_boost*100).toFixed(1)+'%' : '—';
+  $('mem-boost').style.color   = ins.mem_boost > 0 ? 'var(--green)' : ins.mem_boost < 0 ? 'var(--red)' : 'var(--text-2)';
+
+  // Memory dots (visual win/loss pattern from memory matches)
+  const memWr  = ins.mem_win_rate ?? 0.5;
+  const nMatch = ins.mem_n ?? 0;
+  const dotsEl = $('mem-dots');
+  let dotsHtml = '';
+  for (let i = 0; i < Math.min(nMatch, 10); i++) {
+    const isWin = i < Math.round(nMatch * memWr);
+    dotsHtml += `<div class="mem-dot ${isWin?'win':'loss'}"></div>`;
+  }
+  for (let i = nMatch; i < 10; i++) {
+    dotsHtml += `<div class="mem-dot"></div>`;
+  }
+  dotsEl.innerHTML = dotsHtml;
+
+  // ── Online Learning panel ──────────────────────────────────────────────────
+  const ol = ls.online || {};
+  $('ol-updates').textContent = ins.online_updates != null ? Number(ins.online_updates).toLocaleString() : (ol.n_upd||'—');
+  $('ol-acc').textContent     = ol.accuracy != null ? (ol.accuracy*100).toFixed(1)+'%' : '—';
+  $('ol-weight').textContent  = ol.weight   != null ? (ol.weight*100).toFixed(1)+'%' : '—';
+  $('ol-buf').textContent     = ins.feedback_size != null ? ins.feedback_size + ' trades' : '—';
+  $('retrain-in').textContent = ls.retrain_in || '—';
+
+  // ── Confidence Tracker panel ───────────────────────────────────────────────
+  $('ct-thresh').textContent = ins.threshold   != null ? (ins.threshold*100).toFixed(0)+'%' : '—';
+  $('ct-bull').textContent   = ins.final_bull   != null ? (ins.final_bull*100).toFixed(1)+'%' : '—';
+  $('ct-var').textContent    = ins.tab_variance != null ? ins.tab_variance.toFixed(4) : '—';
+  $('ct-regime').textContent = ins.regime_prob  != null ? 'Active' : 'None';
+  $('ct-summary').textContent = ins.conf_summary || '—';
+
+  const bFrac = ins.final_bull ?? 0.5;
+  $('bull-pct').textContent = (bFrac*100).toFixed(1)+'%';
+  $('bull-pct').style.color = bFrac > 0.52 ? 'var(--green)' : bFrac < 0.48 ? 'var(--red)' : 'var(--text-2)';
+  setBar('bull-bar', bFrac, bFrac > 0.52 ? 'var(--green)' : bFrac < 0.48 ? 'var(--red)' : 'var(--blue)');
+}
+
+// ── Open Positions ─────────────────────────────────────────────────────────────
+function renderPositions(d) {
+  const trades = d.open_trades || [];
+  $('pos-count').textContent = trades.length;
+  $('k-open').textContent    = trades.length;
+
+  if (!trades.length) {
+    $('pos-body').innerHTML = '<tr><td colspan="8" style="color:var(--text-3);text-align:center;padding:20px 0">No open positions</td></tr>';
+    return;
+  }
+
+  let html = '';
+  for (const t of trades) {
+    const dir    = t.direction || '?';
+    const dirCls = dir === 'BUY' ? 'bull' : 'bear';
+    const pnl    = t.profit ?? null;
+    html += `
+      <tr>
+        <td><span class="dir-pill ${dirCls}">${dir}</span></td>
+        <td style="color:var(--text-3)">${t.ticket || '—'}</td>
+        <td>${t.lot_size ?? '—'}</td>
+        <td>${fmtPrice(t.entry_price)}</td>
+        <td style="color:var(--red)">${fmtPrice(t.sl_price)}</td>
+        <td style="color:var(--green)">${fmtPrice(t.tp_price)}</td>
+        <td>${t.ai_confidence ?? '—'}%</td>
+        <td>${fmtProfit(pnl)}</td>
+      </tr>`;
+  }
+  $('pos-body').innerHTML = html;
+}
+
+// ── Activity Log ───────────────────────────────────────────────────────────────
+function renderActivity(d) {
+  const acts = d.activity || [];
+  $('act-count').textContent = acts.length;
+
+  if (!acts.length) {
+    $('act-list').innerHTML = '<div style="color:var(--text-3);padding:12px 0;font-size:.8rem">No activity yet</div>';
+    return;
+  }
+
+  let html = '';
+  for (const a of acts) {
+    const ts  = (a.ts || '').slice(11,19) || '—';
+    const sym = a.symbol || '';
+    const msg = a.message || '';
+    const typ = (a.type  || 'INFO').toUpperCase();
+    const msgCls = ['OPEN','CLOSE','WARN','ERROR'].includes(typ) ? 'type-'+typ : '';
+    html += `
+      <div class="act-item">
+        <span class="act-ts">${ts}</span>
+        <span class="act-sym">${sym}</span>
+        <span class="act-msg ${msgCls}">${msg}</span>
+      </div>`;
+  }
+  $('act-list').innerHTML = html;
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+connect();
+</script>
+</body>
+</html>
