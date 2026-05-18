@@ -234,32 +234,67 @@ class TradingEngine:
 
     def _fetch_htf_bias(self, symbol: str) -> str:
         """
-        Fetch H4 bars and determine trend bias from EMA200.
+        Two-level trend filter: H4 EMA200 + D1 EMA50.
+        Both must agree (or at least not conflict) before returning a directional bias.
         Returns 'BUY' | 'SELL' | 'NEUTRAL'.
         """
         htf_cfg = self.config.get('htf_filter', {})
         if not htf_cfg.get('enabled', False):
             return 'NEUTRAL'
 
-        tf   = htf_cfg.get('timeframe', 'H4')
-        bars = htf_cfg.get('bars', 250)
+        tf    = htf_cfg.get('timeframe', 'H4')
+        bars  = htf_cfg.get('bars', 250)
         ema_p = htf_cfg.get('ema_period', 200)
+        # Wide neutral zone: price must be clearly above/below EMA200 before taking a side.
+        # 0.5% on gold ≈ $22 buffer — prevents trading during EMA200 retests.
+        zone  = htf_cfg.get('neutral_zone', 0.005)
 
         try:
+            # ── Level 1: H4 EMA200 ───────────────────────────────────────────
             rates = self.executor.get_ohlcv(symbol, tf, bars)
             if rates is None or len(rates) < ema_p + 10:
                 return 'NEUTRAL'
 
-            df_h4 = rates_to_df(rates)
+            df_h4  = rates_to_df(rates)
             closes = df_h4['close']
             ema200 = closes.ewm(span=ema_p, adjust=False).mean().iloc[-1]
             price  = float(closes.iloc[-1])
 
-            if price > ema200 * 1.001:    # 0.1% buffer ป้องกัน noise
-                return 'BUY'
-            if price < ema200 * 0.999:
-                return 'SELL'
-            return 'NEUTRAL'
+            if price > ema200 * (1 + zone):
+                h4_bias = 'BUY'
+            elif price < ema200 * (1 - zone):
+                h4_bias = 'SELL'
+            else:
+                h4_bias = 'NEUTRAL'   # inside buffer → do not trade
+
+            # ── Level 2: D1 EMA50 (macro trend direction) ────────────────────
+            d1_rates = self.executor.get_ohlcv(symbol, 'D1', 80)
+            d1_bias  = 'NEUTRAL'
+            if d1_rates is not None and len(d1_rates) >= 55:
+                df_d1    = rates_to_df(d1_rates)
+                d1_close = float(df_d1['close'].iloc[-1])
+                d1_ema50 = float(df_d1['close'].ewm(span=50, adjust=False).mean().iloc[-1])
+                if d1_close > d1_ema50 * 1.001:
+                    d1_bias = 'BUY'
+                elif d1_close < d1_ema50 * 0.999:
+                    d1_bias = 'SELL'
+
+            self.logger.debug(
+                f"HTF({symbol}): H4={h4_bias}(price={price:.1f} ema200={ema200:.1f}) "
+                f"D1={d1_bias}(ema50={d1_ema50 if d1_rates is not None and len(d1_rates)>=55 else 'N/A':.1f})"
+            )
+
+            # ── Combine: block if H4 and D1 conflict ─────────────────────────
+            if h4_bias != 'NEUTRAL' and d1_bias != 'NEUTRAL' and h4_bias != d1_bias:
+                # H4 and D1 disagree → market is transitioning → stay flat
+                return 'NEUTRAL'
+
+            # If H4 is NEUTRAL (EMA retest zone), use D1 as tiebreaker but be conservative
+            if h4_bias == 'NEUTRAL':
+                return 'NEUTRAL'   # always flat when H4 is in neutral zone
+
+            return h4_bias
+
         except Exception as exc:
             self.logger.debug(f"_fetch_htf_bias({symbol}): {exc}")
             return 'NEUTRAL'
@@ -464,15 +499,18 @@ class TradingEngine:
         log_activity(symbol, f"สัญญาณ {signal} — H4 bias={htf_bias} — รอยืนยัน AI", 'signal')
 
         if cfg['ai']['enabled'] and self.ai.is_trained:
-            needed_bias = 'bullish' if signal == 'BUY' else 'bearish'
-            if ai_bias != needed_bias or ai_confidence < cfg['ai']['min_confidence']:
+            # Block ONLY when AI confidently predicts the OPPOSITE direction.
+            # Neutral AI = let strategy signal through.
+            # Agreeing AI = definitely let through.
+            opposite_bias = 'bearish' if signal == 'BUY' else 'bullish'
+            if ai_bias == opposite_bias and ai_confidence >= cfg['ai']['min_confidence']:
                 self.logger.info(
-                    f"{symbol}: AI filter blocked — "
-                    f"bias={ai_bias}, confidence={ai_confidence}%"
+                    f"{symbol}: AI filter blocked — AI predicts {ai_bias}({ai_confidence}%) "
+                    f"against signal={signal}"
                 )
                 log_activity(
                     symbol,
-                    f"AI filter ไม่ผ่าน: bias={ai_bias} confidence={ai_confidence}%",
+                    f"AI บล็อก: คาด {ai_bias} {ai_confidence}% สวนทาง {signal}",
                     'warning',
                 )
                 return

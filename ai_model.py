@@ -499,7 +499,9 @@ class AIModel:
         except Exception:
             self._online = None
 
-        base_conf = self._cfg.get('min_confidence', 52) / 100.0
+        # Use fixed 0.52 so bias classification stays sensitive regardless of min_confidence config.
+        # The external gate in main.py controls the actual trading threshold.
+        base_conf = 0.52
         self._conf_tracker = _ConfidenceTracker(base=base_conf)
 
         # ── RL Agent ──────────────────────────────────────────────────────────

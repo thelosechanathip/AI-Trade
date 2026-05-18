@@ -10,7 +10,7 @@ trading:
 risk:
   risk_per_trade: 0.008
   max_concurrent_trades: 3   # ลดจาก 5 → 3 ป้องกันเปิด 5 ไม้ผิดทางพร้อมกัน
-  max_daily_loss: 0.025
+  max_daily_loss: 0.04
   max_drawdown: 0.10
   min_rr_ratio: 1.8
   atr_sl_multiplier: 1.8
@@ -42,7 +42,7 @@ strategy:
   swing_strength: 5
   min_confluence: 3          # เพิ่มจาก 2 → 3 (2/4 ง่ายเกิน)
   adx_period: 14
-  adx_trend_threshold:    22
+  adx_trend_threshold:    25
   adx_range_threshold:    18
   adx_high_vol_threshold: 42
   bb_period: 20
@@ -69,7 +69,7 @@ sessions:
 
 ai:
   enabled: true
-  min_confidence: 62        # เพิ่มจาก 52 → 62 (52% แทบไม่กรอง)
+  min_confidence: 55        # ใช้เป็น threshold ที่ AI คัดค้าน direction อย่างมั่นใจ
   model_type: "ensemble"
   retrain_interval: 360
   forward_bars: 12
@@ -116,6 +116,7 @@ htf_filter:
   timeframe: "H4"            # H4 = กรอง trend ใหญ่
   ema_period: 200
   bars: 250                  # ต้องการ 250 แท่ง H4 สำหรับ EMA200
+  neutral_zone: 0.005        # 0.5% buffer ($22 บน gold) — ป้องกัน EMA200 retest
 
 direction_ban:
   enabled: true
