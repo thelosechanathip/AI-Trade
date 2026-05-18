@@ -364,6 +364,21 @@ def record_equity(balance: float, equity: float) -> None:
     conn.close()
 
 
+def get_open_trades_from_db() -> list:
+    """Return all trades with status='open' — used to restore session state on restart."""
+    if not DB_PATH.exists():
+        return []
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT ticket, symbol, direction, ai_confidence FROM trades WHERE status='open'"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def get_trade_stats() -> dict:
     if not DB_PATH.exists():
         return {'win_rate': 0.0, 'profit_factor': 0.0, 'total_trades': 0, 'total_profit': 0.0}

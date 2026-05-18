@@ -35,6 +35,7 @@ from utils import (
     setup_logging, compute_indicators, init_db,
     insert_trade, close_trade_db, record_equity,
     write_state, get_trade_stats, log_activity,
+    get_open_trades_from_db,
 )
 from strategy      import generate_signal, detect_regime
 from risk          import RiskManager
@@ -86,9 +87,29 @@ class TradingEngine:
         # per-symbol consecutive losses per direction: symbol -> {'BUY': int, 'SELL': int}
         self._dir_loss_streak: dict = {}
 
+        self._restore_open_trades()
+
         self.logger.info("=" * 60)
         self.logger.info("  AI-Trade Engine  |  starting up")
         self.logger.info("=" * 60)
+
+    # ── Session state restore ─────────────────────────────────────────────────
+
+    def _restore_open_trades(self) -> None:
+        """Re-populate _known_tickets from DB open trades so restarts don't lose tracking."""
+        open_trades = get_open_trades_from_db()
+        for t in open_trades:
+            ticket = t['ticket']
+            self._known_tickets.add(ticket)
+            if t.get('direction'):
+                self._ticket_direction[ticket] = t['direction']
+            if t.get('ai_confidence') is not None:
+                self._ticket_confidence[ticket] = int(t['ai_confidence'])
+        if open_trades:
+            self.logger.info(
+                f"Restored {len(open_trades)} open trade(s) from DB: "
+                f"{[t['ticket'] for t in open_trades]}"
+            )
 
     # ── MT5 connection ────────────────────────────────────────────────────────
 

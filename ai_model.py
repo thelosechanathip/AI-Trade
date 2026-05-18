@@ -1578,19 +1578,21 @@ class AIModel:
         what market states led to actual winning and losing trades.
         """
         labeled = self._trade_buf.label_trade(ticket, profit)
-        if not labeled:
-            return
 
-        # Update confidence tracker with real trade outcome
+        # Always update conf tracker — even for trades restored from DB (no features)
         self._conf_tracker.record(
             confidence = self._conf_tracker.threshold,
             profit     = profit,
         )
         logger.info(
             f"Trade {ticket} labeled | profit={profit:+.2f} | "
+            f"features={'yes' if labeled else 'no (restored trade)'} | "
             f"feedback_buf={self._trade_buf.size()} | "
             f"{self._conf_tracker.summary()}"
         )
+
+        if not labeled:
+            return  # no entry features → skip RL/memory updates (features lost on restart)
 
         # ── RL Agent: update immediately with actual P&L ───────────────────────
         if self._rl is not None:
