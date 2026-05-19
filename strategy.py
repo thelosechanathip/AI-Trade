@@ -188,8 +188,17 @@ def generate_signal(
     ema50  = float(latest['ema50'])
     ema200 = float(latest['ema200'])
 
-    trend_up   = (close > ema50) and (close > ema200)
-    trend_down = (close < ema50) and (close < ema200)
+    # When HTF confirms the direction, relax EMA200 requirement (EMA50 sufficient).
+    # This lets BUY signals fire at the start of an upswing before M15 EMA200 turns.
+    if htf_bias_upper == 'BUY':
+        trend_up   = close > ema50
+        trend_down = (close < ema50) and (close < ema200)
+    elif htf_bias_upper == 'SELL':
+        trend_up   = (close > ema50) and (close > ema200)
+        trend_down = close < ema50
+    else:
+        trend_up   = (close > ema50) and (close > ema200)
+        trend_down = (close < ema50) and (close < ema200)
 
     # ── RANGE regime: mean-reversion, respect HTF bias ───────────────────────
     if regime == 'RANGE':
@@ -215,6 +224,29 @@ def generate_signal(
     macd_hist = float(latest['macd_hist'])
     macd_line = float(latest['macd_line'])
     macd_sig  = float(latest['macd_signal'])
+
+    # MACD histogram previous bar (for momentum direction)
+    prev       = df.iloc[-2]
+    prev_mhist = float(prev.get('macd_hist', macd_hist))
+
+    # ── Entry momentum gate (HARD BLOCK) ─────────────────────────────────────
+    # Block SELL if the last 2 completed bars are BOTH bullish (gold bouncing).
+    # Block BUY  if the last 2 completed bars are BOTH bearish (gold collapsing).
+    if len(df) >= 4:
+        b1 = df.iloc[-3]   # 2 bars ago
+        b2 = df.iloc[-2]   # 1 bar ago (last completed)
+        b1_bull = float(b1['close']) > float(b1['open'])
+        b2_bull = float(b2['close']) > float(b2['open'])
+        if trend_down and b1_bull and b2_bull:
+            logger.debug(
+                f"Momentum gate: blocked SELL — last 2 bars both bullish (bounce)"
+            )
+            return 'HOLD', atr, 0.0, 0.0
+        if trend_up and (not b1_bull) and (not b2_bull):
+            logger.debug(
+                f"Momentum gate: blocked BUY — last 2 bars both bearish (dump)"
+            )
+            return 'HOLD', atr, 0.0, 0.0
 
     # ── 3. MACD + RSI alignment (SCORED) ─────────────────────────────────────
     rsi_bull_side = rsi >= 50
@@ -243,20 +275,27 @@ def generate_signal(
     avg_atr       = float(df['atr'].tail(20).mean())
     volatility_ok = atr >= avg_atr * s['atr_threshold_multiplier']
 
-    # ── Confluence scoring (4 conditions) ────────────────────────────────────
-    min_score = s.get('min_confluence', 2)
+    # ── 7. MACD histogram momentum (SCORED bonus) ────────────────────────────
+    # Histogram growing in signal direction = momentum strengthening
+    macd_hist_bull = macd_hist > prev_mhist   # getting more positive
+    macd_hist_bear = macd_hist < prev_mhist   # getting more negative
+
+    # ── Confluence scoring (5 conditions) ────────────────────────────────────
+    min_score = s.get('min_confluence', 3)
 
     buy_conds = {
         'macd_rsi_align': macd_rsi_aligned_bull,
         'rsi_range':      rsi_buy_ok,
         'structure':      structure_up,
         'volatility':     volatility_ok,
+        'macd_momentum':  macd_hist_bull,
     }
     sell_conds = {
         'macd_rsi_align': macd_rsi_aligned_bear,
         'rsi_range':      rsi_sell_ok,
         'structure':      structure_down,
         'volatility':     volatility_ok,
+        'macd_momentum':  macd_hist_bear,
     }
 
     buy_score  = sum(buy_conds.values())
@@ -273,7 +312,7 @@ def generate_signal(
     adx_val   = float(latest.get('adx', 0.0))
     logger.debug(
         f"Signal ({direction}|{regime}) RSI={rsi:.1f} ADX={adx_val:.1f} "
-        f"MACD_hist={macd_hist:.5f} "
+        f"MACD_hist={macd_hist:.5f}(prev={prev_mhist:.5f}) "
         f"score={score}/{len(conds)} need={min_score} "
         f"passed={passed} failed={failed}"
     )

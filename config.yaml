@@ -9,7 +9,8 @@ trading:
 
 risk:
   risk_per_trade: 0.008
-  max_concurrent_trades: 3   # ลดจาก 5 → 3 ป้องกันเปิด 5 ไม้ผิดทางพร้อมกัน
+  max_concurrent_trades: 3   # รวมทุกทิศทาง
+  max_per_direction: 2       # สูงสุด 2 ไม้ต่อทิศ (BUY หรือ SELL)
   max_daily_loss: 0.04
   max_drawdown: 0.10
   min_rr_ratio: 1.8

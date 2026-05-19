@@ -517,6 +517,28 @@ class TradingEngine:
             )
             return
 
+        # ── Per-direction stacking guard ──────────────────────────────────────
+        # Don't pile into a direction when existing same-direction trades are all losing.
+        # Also enforce a per-direction cap (default 2) separate from total cap.
+        _mt5_type = {'BUY': 0, 'SELL': 1}
+        same_dir_pos = [
+            p for p in existing_sym_pos
+            if p.type == _mt5_type.get(signal, -1)
+        ]
+        max_per_dir = cfg['risk'].get('max_per_direction', 2)
+        if len(same_dir_pos) >= max_per_dir:
+            self.logger.debug(
+                f"{symbol}: {len(same_dir_pos)}/{max_per_dir} {signal} trades open — skip"
+            )
+            return
+        if same_dir_pos and all(p.profit < 0 for p in same_dir_pos):
+            total_loss = sum(p.profit for p in same_dir_pos)
+            self.logger.info(
+                f"{symbol}: All {signal} positions in drawdown (total={total_loss:.2f}) — no stacking"
+            )
+            log_activity(symbol, f"งดเพิ่มไม้ {signal} — ทุกไม้ทิศนี้ขาดทุนอยู่", 'warning')
+            return
+
         log_activity(symbol, f"สัญญาณ {signal} — H4 bias={htf_bias} — รอยืนยัน AI", 'signal')
 
         if cfg['ai']['enabled'] and self.ai.is_trained:
