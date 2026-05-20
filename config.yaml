@@ -121,8 +121,20 @@ htf_filter:
 
 direction_ban:
   enabled: true
-  max_same_dir_losses: 2     # แบน direction หลังแพ้ซ้อน 2 ครั้งในทิศเดียวกัน
-  ban_hours: 4               # แบน 4 ชั่วโมง
+  max_same_dir_losses: 2     # hard ban หลังแพ้ซ้อน 2 ครั้ง
+  ban_hours: 4               # hard ban 4 ชั่วโมง
+  ban_hours_soft: 2          # soft ban 2 ชั่วโมง (หลังแพ้ 1 ครั้ง → ลด lot 50%)
+
+# ── Trend Dominance Protection ─────────────────────────────────────────────
+# ป้องกันการเปิด counter-trend เมื่อตลาดมีแนวโน้มชัดเจน
+trend_dominance:
+  enabled: true
+  adx_strong_threshold:   28     # ADX ≥ 28 = เทรนด์แข็งแกร่ง
+  trend_strength_block:  0.55    # strength score ≥ 0.55 = บล็อก counter-trend
+  exhaustion_ema200_pct: 0.025   # ห่างจาก EMA200 > 2.5% = exhausted (block เพิ่ม)
+  rsi_recovery_level:     38     # RSI ต่ำกว่า 38 แล้วเด้งขึ้น = shorts exhausted
+  rsi_rejection_level:    62     # RSI สูงกว่า 62 แล้วตกลง = longs exhausted
+  rsi_momentum_swing:      5     # RSI ต้องขยับ ≥ 5 pts ถึงนับเป็น recovery/rejection
 
 dashboard:
   refresh_interval: 5

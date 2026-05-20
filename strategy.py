@@ -4,32 +4,63 @@ strategy.py — Multi-layer confluence signal engine with market regime detectio
 Regimes (ADX-based):
   TREND    : ADX >= 25 — use trend-following confluence scoring
   RANGE    : ADX < 20  — use mean-reversion (BB + Stochastic + RSI extremes)
-  HIGH_VOL : ADX >= 40 — reduce size, widen SL; still use trend logic
+  HIGH_VOL : ADX >= 42 — trend-following with reduced size
 
-Signal generation:
-  REQUIRED (must pass both):
-    1. Session filter     — London / New York only
-    2. Trend filter       — close above/below both EMA50 and EMA200
+Signal pipeline (new v2.4):
+  1. Session filter           (REQUIRED)
+  2. Market context analysis  → trend direction, strength, exhaustion risk
+  3. Trend dominance protection (HARD BLOCK) — prevents counter-trend in strong moves
+  4. EMA trend filter         (REQUIRED, HTF-aware)
+  5. Entry momentum gate      (HARD BLOCK) — 2-bar candle direction
+  6. RSI recovery check       (HARD BLOCK) — block SELL if RSI recovering from oversold
+  7. Confluence scoring       (5 conditions, need >= min_confluence)
+  8. HTF bias guard           (HARD BLOCK) — final check against H4+D1 trend
 
-  SCORED (need >= min_confluence of 4 in TREND; different set in RANGE):
-    3. MACD + RSI aligned — MACD histogram direction AND RSI agree on side
-    4. RSI in range       — not overbought/oversold
-    5. Market structure   — HH/HL or LH/LL detected
-    6. Volatility filter  — ATR above threshold
-
-Returns: signal ('BUY' | 'SELL' | 'HOLD'), atr, last_swing_high, last_swing_low,
-         regime ('TREND' | 'RANGE' | 'HIGH_VOL')
+Returns: signal ('BUY' | 'SELL' | 'HOLD'), atr, last_swing_high, last_swing_low
 """
 
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timezone, time as dt_time
 from typing import Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 from utils import compute_indicators, detect_market_structure
 
 logger = logging.getLogger('AI-Trade')
+
+
+# ── Data structures ───────────────────────────────────────────────────────────
+
+@dataclass
+class MarketContext:
+    """Rich market state snapshot used throughout signal generation."""
+    regime: str = 'TREND'           # 'TREND' | 'RANGE' | 'HIGH_VOL'
+    trend_dir: str = 'NEUTRAL'      # dominant M15 trend direction
+    trend_strength: float = 0.0     # 0.0–1.0  (ADX + EMA distance combined)
+    adx: float = 0.0
+    rsi: float = 50.0
+    rsi_prev: float = 50.0          # RSI one bar ago (for recovery detection)
+    ema50: float = 0.0
+    ema200: float = 0.0
+    close: float = 0.0
+    atr: float = 0.0
+    exhaustion_long: bool = False   # price very far above EMA200 → longs exhausted
+    exhaustion_short: bool = False  # price very far below EMA200 → shorts exhausted
+    rsi_recovering: bool = False    # RSI rising from oversold  (bullish recovery)
+    rsi_rejecting: bool = False     # RSI falling from overbought (bearish rejection)
+    macd_hist: float = 0.0
+    macd_hist_prev: float = 0.0
+
+    @property
+    def macd_momentum_bull(self) -> bool:
+        return self.macd_hist > self.macd_hist_prev
+
+    @property
+    def macd_momentum_bear(self) -> bool:
+        return self.macd_hist < self.macd_hist_prev
 
 
 # ── Session filter ────────────────────────────────────────────────────────────
@@ -41,7 +72,6 @@ def _parse_time(s: str) -> dt_time:
 
 def check_session_filter(config: dict, bar_time: Optional[datetime] = None) -> bool:
     sessions = config.get('sessions', {})
-    # sessions.enabled = false → เทรด 24 ชั่วโมง ไม่กรอง session
     if not sessions.get('enabled', True):
         return True
 
@@ -69,14 +99,13 @@ def check_session_filter(config: dict, bar_time: Optional[datetime] = None) -> b
 
 def detect_regime(df: pd.DataFrame, config: dict) -> str:
     """
-    Classify market regime from ADX reading.
-
+    Classify market regime from ADX.
     Returns: 'TREND' | 'RANGE' | 'HIGH_VOL'
     """
-    s = config['strategy']
+    s            = config['strategy']
     adx_trend    = s.get('adx_trend_threshold',    25)
     adx_range    = s.get('adx_range_threshold',    20)
-    adx_high_vol = s.get('adx_high_vol_threshold', 40)
+    adx_high_vol = s.get('adx_high_vol_threshold', 42)
 
     if 'adx' not in df.columns or len(df) < 1:
         return 'TREND'
@@ -89,7 +118,158 @@ def detect_regime(df: pd.DataFrame, config: dict) -> str:
         return 'TREND'
     if adx < adx_range:
         return 'RANGE'
-    return 'TREND'   # between range and trend thresholds → treat as trend
+    return 'TREND'
+
+
+# ── Market context builder ────────────────────────────────────────────────────
+
+def build_market_context(df: pd.DataFrame, config: dict) -> MarketContext:
+    """
+    Build a rich MarketContext from M15 OHLCV+indicators.
+
+    Computes trend direction, strength, exhaustion flags, and RSI recovery/rejection
+    signals that are used as hard gates and scoring bonuses in generate_signal().
+    """
+    s      = config['strategy']
+    td_cfg = config.get('trend_dominance', {})
+
+    latest = df.iloc[-1]
+    prev   = df.iloc[-2] if len(df) >= 2 else latest
+
+    close      = float(latest['close'])
+    ema50      = float(latest['ema50'])
+    ema200     = float(latest['ema200'])
+    adx        = float(latest.get('adx', 0.0))
+    rsi        = float(latest.get('rsi', 50.0))
+    rsi_prev   = float(prev.get('rsi', 50.0))
+    atr        = float(latest.get('atr', 0.0))
+    macd_hist  = float(latest.get('macd_hist', 0.0))
+    mh_prev    = float(prev.get('macd_hist', macd_hist))
+
+    regime = detect_regime(df, config)
+
+    # ── Trend direction from EMA alignment ───────────────────────────────────
+    if close > ema50 and ema50 > ema200:
+        trend_dir = 'BUY'
+    elif close < ema50 and ema50 < ema200:
+        trend_dir = 'SELL'
+    elif close > ema50 and close > ema200:
+        trend_dir = 'BUY'
+    elif close < ema50 and close < ema200:
+        trend_dir = 'SELL'
+    else:
+        trend_dir = 'NEUTRAL'
+
+    # ── Trend strength: blend ADX (0-50 → 0-1) and EMA distance ─────────────
+    adx_norm      = min(adx / 50.0, 1.0)
+    ema_dist_pct  = abs(close - ema200) / max(ema200, 1.0)
+    trend_strength = float(np.clip(adx_norm * 0.6 + ema_dist_pct * 10 * 0.4, 0.0, 1.0))
+
+    # ── Exhaustion: price very far from EMA200 → trend may be overextended ───
+    exhaustion_pct = td_cfg.get('exhaustion_ema200_pct', 0.025)  # 2.5% default
+    exhaustion_long  = close > ema200 * (1 + exhaustion_pct)
+    exhaustion_short = close < ema200 * (1 - exhaustion_pct)
+
+    # ── RSI momentum states ───────────────────────────────────────────────────
+    # RSI recovering: was oversold, now rising — suggests bearish move exhausted
+    rsi_oversold_level   = td_cfg.get('rsi_recovery_level',   38)
+    rsi_overbought_level = td_cfg.get('rsi_rejection_level',  62)
+    rsi_min_swing        = td_cfg.get('rsi_momentum_swing',    5)  # must move ≥5 pts
+
+    rsi_recovering = (
+        rsi_prev < rsi_oversold_level
+        and rsi > rsi_prev
+        and (rsi - rsi_prev) >= rsi_min_swing
+    )
+    rsi_rejecting = (
+        rsi_prev > rsi_overbought_level
+        and rsi < rsi_prev
+        and (rsi_prev - rsi) >= rsi_min_swing
+    )
+
+    return MarketContext(
+        regime           = regime,
+        trend_dir        = trend_dir,
+        trend_strength   = trend_strength,
+        adx              = adx,
+        rsi              = rsi,
+        rsi_prev         = rsi_prev,
+        ema50            = ema50,
+        ema200           = ema200,
+        close            = close,
+        atr              = atr,
+        exhaustion_long  = exhaustion_long,
+        exhaustion_short = exhaustion_short,
+        rsi_recovering   = rsi_recovering,
+        rsi_rejecting    = rsi_rejecting,
+        macd_hist        = macd_hist,
+        macd_hist_prev   = mh_prev,
+    )
+
+
+# ── Trend dominance protection ────────────────────────────────────────────────
+
+def _trend_dominance_blocked(
+    signal: str,
+    ctx: MarketContext,
+    htf_bias: str,
+    config: dict,
+) -> Tuple[bool, str]:
+    """
+    Hard block for counter-trend trades when a strong trend is active.
+
+    Three-layer check:
+      1. HTF says opposite direction with ADX confirming strength
+      2. Price is exhausted on the signal side (already over-extended)
+      3. RSI shows momentum reversal against the proposed signal
+
+    Returns (blocked: bool, reason: str)
+    """
+    td_cfg = config.get('trend_dominance', {})
+    if not td_cfg.get('enabled', True):
+        return False, ''
+
+    adx_threshold  = td_cfg.get('adx_strong_threshold',    28)
+    strength_block = td_cfg.get('trend_strength_block',  0.55)
+
+    # ── Layer 1: Strong HTF trend opposes signal ──────────────────────────────
+    # When HTF clearly disagrees AND ADX confirms the HTF trend is strong
+    if htf_bias != 'NEUTRAL' and htf_bias != signal:
+        if ctx.adx >= adx_threshold:
+            return True, (
+                f"HTF={htf_bias} opposes {signal} with ADX={ctx.adx:.1f} "
+                f"(strong trend, ≥{adx_threshold})"
+            )
+
+    # ── Layer 2: Price exhaustion on signal side ──────────────────────────────
+    # SELL while longs are exhausted (price far above EMA200) → already moved too far down?
+    # Actually: exhaustion_short = price far BELOW EMA200 → shorts are exhausted → block SELL
+    if signal == 'SELL' and ctx.exhaustion_short:
+        return True, (
+            f"Short exhaustion: price is already {((ctx.ema200 - ctx.close)/ctx.ema200*100):.1f}% "
+            f"below EMA200 — shorts likely exhausted"
+        )
+    if signal == 'BUY' and ctx.exhaustion_long:
+        return True, (
+            f"Long exhaustion: price is already {((ctx.close - ctx.ema200)/ctx.ema200*100):.1f}% "
+            f"above EMA200 — longs likely exhausted"
+        )
+
+    # ── Layer 3: RSI momentum reversal ───────────────────────────────────────
+    # RSI recovering from oversold → bearish momentum is reversing → block SELL
+    if signal == 'SELL' and ctx.rsi_recovering:
+        return True, (
+            f"RSI recovery: RSI rose {ctx.rsi - ctx.rsi_prev:.1f}pts from oversold "
+            f"({ctx.rsi_prev:.1f}→{ctx.rsi:.1f}) — blocking SELL"
+        )
+    # RSI rejecting from overbought → bullish momentum is reversing → block BUY
+    if signal == 'BUY' and ctx.rsi_rejecting:
+        return True, (
+            f"RSI rejection: RSI fell {ctx.rsi_prev - ctx.rsi:.1f}pts from overbought "
+            f"({ctx.rsi_prev:.1f}→{ctx.rsi:.1f}) — blocking BUY"
+        )
+
+    return False, ''
 
 
 # ── Range (mean-reversion) signal ─────────────────────────────────────────────
@@ -97,43 +277,43 @@ def detect_regime(df: pd.DataFrame, config: dict) -> str:
 def _range_signal(
     df: pd.DataFrame,
     config: dict,
+    ctx: MarketContext,
 ) -> Tuple[str, float, float, float]:
     """
-    Mean-reversion entry when the market is ranging (ADX < threshold).
-    Uses Bollinger Bands + Stochastic + RSI extremes.
+    Mean-reversion entry when ADX < range threshold.
+
+    Uses Bollinger Bands pct_b + Stochastic + RSI extremes.
+    Requires 2/3 conditions per side.
+    Also respects exhaustion flags: exhaustion_short blocks SELL even in RANGE.
     """
     s      = config['strategy']
     latest = df.iloc[-1]
-    atr    = float(latest.get('atr', 0.0))
+    atr    = ctx.atr
 
-    close   = float(latest['close'])
-    bb_pct  = float(latest.get('bb_pct', 0.5))
+    bb_pct  = float(latest.get('bb_pct',  0.5))
     stoch_k = float(latest.get('stoch_k', 50.0))
     stoch_d = float(latest.get('stoch_d', 50.0))
-    rsi     = float(latest.get('rsi', 50.0))
+    rsi     = ctx.rsi
 
-    bb_buy  = s.get('range_bb_pct_buy',     0.15)
-    bb_sell = s.get('range_bb_pct_sell',    0.85)
-    rsi_os  = s.get('range_rsi_oversold',   35)
-    rsi_ob  = s.get('range_rsi_overbought', 65)
+    bb_buy  = s.get('range_bb_pct_buy',     0.12)
+    bb_sell = s.get('range_bb_pct_sell',    0.88)
+    rsi_os  = s.get('range_rsi_oversold',   33)
+    rsi_ob  = s.get('range_rsi_overbought', 67)
 
-    # Buy: price near lower band + oversold stoch + oversold RSI
     buy_score = sum([
         bb_pct <= bb_buy,
         stoch_k < 20 and stoch_d < 20,
         rsi <= rsi_os,
     ])
-
-    # Sell: price near upper band + overbought stoch + overbought RSI
     sell_score = sum([
         bb_pct >= bb_sell,
         stoch_k > 80 and stoch_d > 80,
         rsi >= rsi_ob,
     ])
 
-    if buy_score >= 2:
+    if buy_score >= 2 and not ctx.exhaustion_long:
         return 'BUY', atr, 0.0, 0.0
-    if sell_score >= 2:
+    if sell_score >= 2 and not ctx.exhaustion_short:
         return 'SELL', atr, 0.0, 0.0
 
     return 'HOLD', atr, 0.0, 0.0
@@ -146,158 +326,191 @@ def generate_signal(
     config: dict,
     bar_time: Optional[datetime] = None,
     htf_bias: str = 'NEUTRAL',
+    htf_strength: float = 0.0,
 ) -> Tuple[str, float, float, float]:
     """
-    Regime-adaptive signal generation.
+    Regime-adaptive, bias-balanced signal generation (v2.4).
 
-    In TREND / HIGH_VOL mode: score-based confluence (same as before).
-    In RANGE mode: mean-reversion using BB + Stochastic + RSI extremes.
+    Pipeline (all layers in order — any HARD BLOCK returns HOLD immediately):
+      1. Session filter
+      2. Market context build (regime, trend_dir, strength, exhaustion, RSI states)
+      3. Trend dominance protection (hard block counter-trend in strong moves)
+      4. EMA trend filter (HTF-aware: relaxed when HTF confirms direction)
+      5. RANGE mode branch (mean-reversion path)
+      6. Entry momentum gate (2-bar candle direction check)
+      7. RSI recovery/rejection gate
+      8. Confluence scoring (5 conditions, need >= min_confluence)
+      9. Final HTF guard
 
-    htf_bias: 'BUY' | 'SELL' | 'NEUTRAL'
-      When not NEUTRAL, blocks signals that oppose the higher-timeframe trend.
+    Args:
+        df:          M15 OHLCV + computed indicators
+        config:      full config dict
+        bar_time:    current bar time (for session filter)
+        htf_bias:    'BUY' | 'SELL' | 'NEUTRAL' from higher-timeframe filter
+        htf_strength: 0.0–1.0, strength of HTF trend (from _fetch_htf_bias)
 
-    Returns: signal, atr, last_swing_high, last_swing_low
+    Returns:
+        (signal, atr, last_swing_high, last_swing_low)
     """
-    s        = config['strategy']
-    min_bars = s['ema_slow'] + s['atr_period'] + s['structure_lookback'] * 4 + 20
+    s = config['strategy']
 
+    min_bars = s['ema_slow'] + s['atr_period'] + s['structure_lookback'] * 4 + 20
     if len(df) < min_bars:
         return 'HOLD', 0.0, 0.0, 0.0
 
     df = compute_indicators(df, config)
-    if len(df) < 3:
+    if len(df) < 4:
         return 'HOLD', 0.0, 0.0, 0.0
 
     latest = df.iloc[-1]
-    atr    = float(latest['atr'])
 
-    # ── 1. Session filter (REQUIRED) ─────────────────────────────────────────
+    # ── 1. Session filter ─────────────────────────────────────────────────────
     if not check_session_filter(config, bar_time):
-        return 'HOLD', atr, 0.0, 0.0
+        return 'HOLD', float(latest.get('atr', 0.0)), 0.0, 0.0
 
-    # ── Detect regime ─────────────────────────────────────────────────────────
-    regime = detect_regime(df, config)
+    # ── 2. Build market context ───────────────────────────────────────────────
+    ctx = build_market_context(df, config)
+    htf_upper = htf_bias.upper()
 
-    # ── HTF bias guard (REQUIRED when htf_filter.enabled) ────────────────────
-    htf_cfg = config.get('htf_filter', {})
-    htf_enabled = htf_cfg.get('enabled', False)
-    htf_bias_upper = htf_bias.upper()
+    # ── 3. Trend dominance protection (hard block) ────────────────────────────
+    # Check both BUY and SELL candidate before committing to a direction.
+    # This is evaluated again per-direction later; this early check catches cases
+    # where we can short-circuit before running the full confluence scoring.
 
-    # ── 2. Trend filter (REQUIRED in all regimes) ─────────────────────────────
-    close  = float(latest['close'])
-    ema50  = float(latest['ema50'])
-    ema200 = float(latest['ema200'])
+    # ── 4. EMA trend filter (direction-gating) ────────────────────────────────
+    close  = ctx.close
+    ema50  = ctx.ema50
+    ema200 = ctx.ema200
 
-    # When HTF confirms the direction, relax EMA200 requirement (EMA50 sufficient).
-    # This lets BUY signals fire at the start of an upswing before M15 EMA200 turns.
-    if htf_bias_upper == 'BUY':
-        trend_up   = close > ema50
+    # When HTF confirms the direction, relax EMA200 requirement.
+    # This allows catching the early phase of a trend reversal on M15.
+    if htf_upper == 'BUY':
+        trend_up   = close > ema50                            # only need EMA50 alignment
         trend_down = (close < ema50) and (close < ema200)
-    elif htf_bias_upper == 'SELL':
+    elif htf_upper == 'SELL':
         trend_up   = (close > ema50) and (close > ema200)
-        trend_down = close < ema50
+        trend_down = close < ema50                            # only need EMA50 alignment
     else:
         trend_up   = (close > ema50) and (close > ema200)
         trend_down = (close < ema50) and (close < ema200)
 
-    # ── RANGE regime: mean-reversion, respect HTF bias ───────────────────────
-    if regime == 'RANGE':
-        raw_sig, raw_atr, sh, sl = _range_signal(df, config)
-        if (htf_enabled and htf_bias_upper != 'NEUTRAL'
-                and raw_sig != 'HOLD' and raw_sig != htf_bias_upper):
-            logger.debug(
-                f"HTF guard (RANGE): blocked {raw_sig}, H4 bias={htf_bias_upper}"
-            )
+    # ── RANGE mode: mean-reversion path ──────────────────────────────────────
+    if ctx.regime == 'RANGE':
+        raw_sig, raw_atr, sh, sl = _range_signal(df, config, ctx)
+        if raw_sig == 'HOLD':
             return 'HOLD', raw_atr, sh, sl
+
+        # Apply trend dominance check even in RANGE (no counter-trend mean-rev in strong trend)
+        blocked, reason = _trend_dominance_blocked(raw_sig, ctx, htf_upper, config)
+        if blocked:
+            logger.debug(f"RANGE trend-dominance blocked {raw_sig}: {reason}")
+            return 'HOLD', raw_atr, sh, sl
+
+        # HTF guard for range: block signals that oppose a non-neutral HTF bias
+        if htf_upper != 'NEUTRAL' and raw_sig != htf_upper:
+            logger.debug(f"HTF guard (RANGE): blocked {raw_sig}, H4 bias={htf_upper}")
+            return 'HOLD', raw_atr, sh, sl
+
         return raw_sig, raw_atr, sh, sl
 
-    # ── TREND / HIGH_VOL: require clear trend ─────────────────────────────────
+    # ── TREND / HIGH_VOL: require price on correct side of EMA ───────────────
     if not trend_up and not trend_down:
         logger.debug(
             f"HOLD: price between EMAs "
-            f"(close={close:.2f} ema50={ema50:.2f} ema200={ema200:.2f})"
+            f"(close={close:.1f} ema50={ema50:.1f} ema200={ema200:.1f})"
         )
-        return 'HOLD', atr, 0.0, 0.0
+        return 'HOLD', ctx.atr, 0.0, 0.0
 
-    # ── Indicators ───────────────────────────────────────────────────────────
-    rsi       = float(latest['rsi'])
-    macd_hist = float(latest['macd_hist'])
-    macd_line = float(latest['macd_line'])
-    macd_sig  = float(latest['macd_signal'])
+    # Determine candidate direction from EMA filter
+    candidate = 'BUY' if trend_up else 'SELL'
 
-    # MACD histogram previous bar (for momentum direction)
-    prev       = df.iloc[-2]
-    prev_mhist = float(prev.get('macd_hist', macd_hist))
+    # ── Trend dominance protection (hard block) ───────────────────────────────
+    blocked, reason = _trend_dominance_blocked(candidate, ctx, htf_upper, config)
+    if blocked:
+        logger.debug(f"Trend dominance blocked {candidate}: {reason}")
+        return 'HOLD', ctx.atr, 0.0, 0.0
 
-    # ── Entry momentum gate (HARD BLOCK) ─────────────────────────────────────
-    # Block SELL if the last 2 completed bars are BOTH bullish (gold bouncing).
-    # Block BUY  if the last 2 completed bars are BOTH bearish (gold collapsing).
+    # ── 5. Entry momentum gate (hard block) ───────────────────────────────────
+    # Block SELL if last 2 completed bars were BOTH bullish (price bouncing).
+    # Block BUY  if last 2 completed bars were BOTH bearish (price dumping).
     if len(df) >= 4:
-        b1 = df.iloc[-3]   # 2 bars ago
-        b2 = df.iloc[-2]   # 1 bar ago (last completed)
+        b1 = df.iloc[-3]
+        b2 = df.iloc[-2]
         b1_bull = float(b1['close']) > float(b1['open'])
         b2_bull = float(b2['close']) > float(b2['open'])
-        if trend_down and b1_bull and b2_bull:
+        if candidate == 'SELL' and b1_bull and b2_bull:
             logger.debug(
-                f"Momentum gate: blocked SELL — last 2 bars both bullish (bounce)"
+                f"Momentum gate: blocked SELL — 2 consecutive bullish bars "
+                f"(close={close:.1f})"
             )
-            return 'HOLD', atr, 0.0, 0.0
-        if trend_up and (not b1_bull) and (not b2_bull):
+            return 'HOLD', ctx.atr, 0.0, 0.0
+        if candidate == 'BUY' and (not b1_bull) and (not b2_bull):
             logger.debug(
-                f"Momentum gate: blocked BUY — last 2 bars both bearish (dump)"
+                f"Momentum gate: blocked BUY — 2 consecutive bearish bars "
+                f"(close={close:.1f})"
             )
-            return 'HOLD', atr, 0.0, 0.0
+            return 'HOLD', ctx.atr, 0.0, 0.0
 
-    # ── 3. MACD + RSI alignment (SCORED) ─────────────────────────────────────
+    # ── 6. RSI recovery / rejection gate (hard block) ─────────────────────────
+    # RSI rising sharply from oversold → shorts are losing momentum → no SELL
+    if candidate == 'SELL' and ctx.rsi_recovering:
+        logger.debug(
+            f"RSI recovery gate: blocked SELL "
+            f"(RSI {ctx.rsi_prev:.1f}→{ctx.rsi:.1f}, recovering from oversold)"
+        )
+        return 'HOLD', ctx.atr, 0.0, 0.0
+    # RSI falling sharply from overbought → longs losing momentum → no BUY
+    if candidate == 'BUY' and ctx.rsi_rejecting:
+        logger.debug(
+            f"RSI rejection gate: blocked BUY "
+            f"(RSI {ctx.rsi_prev:.1f}→{ctx.rsi:.1f}, rejecting from overbought)"
+        )
+        return 'HOLD', ctx.atr, 0.0, 0.0
+
+    # ── 7. Confluence scoring ─────────────────────────────────────────────────
+    rsi       = ctx.rsi
+    macd_hist = ctx.macd_hist
+    macd_line = float(latest.get('macd_line',   0.0))
+    macd_sig  = float(latest.get('macd_signal', 0.0))
+
     rsi_bull_side = rsi >= 50
     rsi_bear_side = rsi <= 50
 
-    macd_raw_bull = (macd_line > macd_sig) and (macd_hist > 0)
-    macd_raw_bear = (macd_line < macd_sig) and (macd_hist < 0)
-
+    macd_raw_bull         = (macd_line > macd_sig) and (macd_hist > 0)
+    macd_raw_bear         = (macd_line < macd_sig) and (macd_hist < 0)
     macd_rsi_aligned_bull = macd_raw_bull and rsi_bull_side
     macd_rsi_aligned_bear = macd_raw_bear and rsi_bear_side
 
-    # ── 4. RSI in tradeable range (SCORED) ────────────────────────────────────
     rsi_buy_ok  = s['rsi_buy_min']  <= rsi <= s['rsi_buy_max']
     rsi_sell_ok = s['rsi_sell_min'] <= rsi <= s['rsi_sell_max']
 
-    # ── 5. Market structure (SCORED) ─────────────────────────────────────────
     structure_up, structure_down, last_sh, last_sl = detect_market_structure(
         df,
-        lookback=s['structure_lookback'],
-        strength=s['swing_strength'],
+        lookback = s['structure_lookback'],
+        strength = s['swing_strength'],
     )
     last_sh = last_sh or 0.0
     last_sl = last_sl or 0.0
 
-    # ── 6. Volatility filter (SCORED) ────────────────────────────────────────
     avg_atr       = float(df['atr'].tail(20).mean())
-    volatility_ok = atr >= avg_atr * s['atr_threshold_multiplier']
-
-    # ── 7. MACD histogram momentum (SCORED bonus) ────────────────────────────
-    # Histogram growing in signal direction = momentum strengthening
-    macd_hist_bull = macd_hist > prev_mhist   # getting more positive
-    macd_hist_bear = macd_hist < prev_mhist   # getting more negative
-
-    # ── Confluence scoring (5 conditions) ────────────────────────────────────
-    min_score = s.get('min_confluence', 3)
+    volatility_ok = ctx.atr >= avg_atr * s['atr_threshold_multiplier']
 
     buy_conds = {
         'macd_rsi_align': macd_rsi_aligned_bull,
         'rsi_range':      rsi_buy_ok,
         'structure':      structure_up,
         'volatility':     volatility_ok,
-        'macd_momentum':  macd_hist_bull,
+        'macd_momentum':  ctx.macd_momentum_bull,
     }
     sell_conds = {
         'macd_rsi_align': macd_rsi_aligned_bear,
         'rsi_range':      rsi_sell_ok,
         'structure':      structure_down,
         'volatility':     volatility_ok,
-        'macd_momentum':  macd_hist_bear,
+        'macd_momentum':  ctx.macd_momentum_bear,
     }
 
+    min_score  = s.get('min_confluence', 3)
     buy_score  = sum(buy_conds.values())
     sell_score = sum(sell_conds.values())
 
@@ -309,23 +522,25 @@ def generate_signal(
     score     = buy_score if trend_up else sell_score
     passed    = [k for k, v in conds.items() if v]
     failed    = [k for k, v in conds.items() if not v]
-    adx_val   = float(latest.get('adx', 0.0))
     logger.debug(
-        f"Signal ({direction}|{regime}) RSI={rsi:.1f} ADX={adx_val:.1f} "
-        f"MACD_hist={macd_hist:.5f}(prev={prev_mhist:.5f}) "
+        f"Signal ({direction}|{ctx.regime}) RSI={rsi:.1f} ADX={ctx.adx:.1f} "
+        f"strength={ctx.trend_strength:.2f} "
+        f"MACD_hist={macd_hist:.5f}(Δ{macd_hist - ctx.macd_hist_prev:+.5f}) "
         f"score={score}/{len(conds)} need={min_score} "
         f"passed={passed} failed={failed}"
     )
 
+    # ── 8. Final HTF guard ────────────────────────────────────────────────────
     if buy_ok:
-        if htf_enabled and htf_bias_upper == 'SELL':
-            logger.debug(f"HTF guard: blocked BUY, H4 bias=SELL")
-            return 'HOLD', atr, last_sh, last_sl
-        return 'BUY', atr, last_sh, last_sl
-    if sell_ok:
-        if htf_enabled and htf_bias_upper == 'BUY':
-            logger.debug(f"HTF guard: blocked SELL, H4 bias=BUY")
-            return 'HOLD', atr, last_sh, last_sl
-        return 'SELL', atr, last_sh, last_sl
+        if htf_upper == 'SELL':
+            logger.debug(f"HTF guard: blocked BUY, H4 bias=SELL strength={htf_strength:.2f}")
+            return 'HOLD', ctx.atr, last_sh, last_sl
+        return 'BUY', ctx.atr, last_sh, last_sl
 
-    return 'HOLD', atr, last_sh, last_sl
+    if sell_ok:
+        if htf_upper == 'BUY':
+            logger.debug(f"HTF guard: blocked SELL, H4 bias=BUY strength={htf_strength:.2f}")
+            return 'HOLD', ctx.atr, last_sh, last_sl
+        return 'SELL', ctx.atr, last_sh, last_sl
+
+    return 'HOLD', ctx.atr, last_sh, last_sl

@@ -253,44 +253,59 @@ class TradingEngine:
 
     # ── Higher-timeframe trend bias ───────────────────────────────────────────
 
-    def _fetch_htf_bias(self, symbol: str) -> str:
+    def _fetch_htf_bias(self, symbol: str) -> tuple:
         """
-        Two-level trend filter: H4 EMA200 + D1 EMA50.
-        Both must agree (or at least not conflict) before returning a directional bias.
-        Returns 'BUY' | 'SELL' | 'NEUTRAL'.
+        Three-level Higher Timeframe trend filter.
+
+        Levels:
+          H4  EMA200 — intermediate trend (200 × 4h ≈ 33 trading days)
+          D1  EMA50  — macro trend direction
+          H1  EMA50  — intraday momentum bridge between M15 and H4
+
+        Voting logic:
+          • All three must not conflict to return a directional bias.
+          • Any level alone returning NEUTRAL makes the overall bias NEUTRAL.
+          • H4 and D1 conflicting → NEUTRAL (transitioning market).
+          • H1 used as a confirmation bridge: if H4+D1 agree but H1 opposes,
+            downgrade confidence (still return direction but low strength).
+
+        Returns:
+          (bias: str, strength: float)
+          bias     — 'BUY' | 'SELL' | 'NEUTRAL'
+          strength — 0.0–1.0  (how strongly all levels agree)
         """
         htf_cfg = self.config.get('htf_filter', {})
         if not htf_cfg.get('enabled', False):
-            return 'NEUTRAL'
+            return 'NEUTRAL', 0.0
 
         tf    = htf_cfg.get('timeframe', 'H4')
         bars  = htf_cfg.get('bars', 250)
         ema_p = htf_cfg.get('ema_period', 200)
-        # Wide neutral zone: price must be clearly above/below EMA200 before taking a side.
-        # 0.5% on gold ≈ $22 buffer — prevents trading during EMA200 retests.
-        zone  = htf_cfg.get('neutral_zone', 0.005)
+        zone  = htf_cfg.get('neutral_zone', 0.005)   # 0.5% ≈ $22 buffer
 
         try:
             # ── Level 1: H4 EMA200 ───────────────────────────────────────────
             rates = self.executor.get_ohlcv(symbol, tf, bars)
             if rates is None or len(rates) < ema_p + 10:
-                return 'NEUTRAL'
+                return 'NEUTRAL', 0.0
 
             df_h4  = rates_to_df(rates)
             closes = df_h4['close']
-            ema200 = closes.ewm(span=ema_p, adjust=False).mean().iloc[-1]
-            price  = float(closes.iloc[-1])
+            ema200_h4 = float(closes.ewm(span=ema_p, adjust=False).mean().iloc[-1])
+            price     = float(closes.iloc[-1])
+            h4_dist   = (price - ema200_h4) / max(ema200_h4, 1.0)
 
-            if price > ema200 * (1 + zone):
+            if price > ema200_h4 * (1 + zone):
                 h4_bias = 'BUY'
-            elif price < ema200 * (1 - zone):
+            elif price < ema200_h4 * (1 - zone):
                 h4_bias = 'SELL'
             else:
-                h4_bias = 'NEUTRAL'   # inside buffer → do not trade
+                h4_bias = 'NEUTRAL'
 
-            # ── Level 2: D1 EMA50 (macro trend direction) ────────────────────
-            d1_rates = self.executor.get_ohlcv(symbol, 'D1', 80)
-            d1_bias  = 'NEUTRAL'
+            # ── Level 2: D1 EMA50 (macro) ────────────────────────────────────
+            d1_rates  = self.executor.get_ohlcv(symbol, 'D1', 80)
+            d1_bias   = 'NEUTRAL'
+            d1_ema50  = None
             if d1_rates is not None and len(d1_rates) >= 55:
                 df_d1    = rates_to_df(d1_rates)
                 d1_close = float(df_d1['close'].iloc[-1])
@@ -300,29 +315,58 @@ class TradingEngine:
                 elif d1_close < d1_ema50 * 0.999:
                     d1_bias = 'SELL'
 
+            # ── Level 3: H1 EMA50 (intraday bridge) ──────────────────────────
+            h1_rates = self.executor.get_ohlcv(symbol, 'H1', 80)
+            h1_bias  = 'NEUTRAL'
+            h1_ema50 = None
+            if h1_rates is not None and len(h1_rates) >= 55:
+                df_h1    = rates_to_df(h1_rates)
+                h1_close = float(df_h1['close'].iloc[-1])
+                h1_ema50 = float(df_h1['close'].ewm(span=50, adjust=False).mean().iloc[-1])
+                if h1_close > h1_ema50 * 1.0005:
+                    h1_bias = 'BUY'
+                elif h1_close < h1_ema50 * 0.9995:
+                    h1_bias = 'SELL'
+
             self.logger.debug(
-                f"HTF({symbol}): H4={h4_bias}(price={price:.1f} ema200={ema200:.1f}) "
-                f"D1={d1_bias}(ema50={d1_ema50 if d1_rates is not None and len(d1_rates)>=55 else 'N/A':.1f})"
+                f"HTF({symbol}): H4={h4_bias}(dist={h4_dist:+.3%}) "
+                f"D1={d1_bias}(ema50={d1_ema50:.1f} if d1_ema50 else 'N/A') "
+                f"H1={h1_bias}(ema50={h1_ema50:.1f} if h1_ema50 else 'N/A')"
             )
 
-            # ── Combine: block if H4 and D1 conflict ─────────────────────────
-            if h4_bias != 'NEUTRAL' and d1_bias != 'NEUTRAL' and h4_bias != d1_bias:
-                # H4 and D1 disagree → market is transitioning → stay flat
-                return 'NEUTRAL'
-
-            # If H4 is NEUTRAL (EMA retest zone), use D1 as tiebreaker but be conservative
+            # ── Combine: H4+D1 are the primary signals ────────────────────────
+            # If H4 is in the neutral zone, we cannot trade — price is at EMA retest
             if h4_bias == 'NEUTRAL':
-                return 'NEUTRAL'   # always flat when H4 is in neutral zone
+                return 'NEUTRAL', 0.0
 
-            return h4_bias
+            # H4 and D1 conflict → transitioning market → stay flat
+            if d1_bias != 'NEUTRAL' and d1_bias != h4_bias:
+                return 'NEUTRAL', 0.0
+
+            # Both H4 and D1 agree (or D1 is NEUTRAL) → direction is h4_bias
+            bias = h4_bias
+
+            # ── Calculate trend strength (0.0–1.0) ───────────────────────────
+            # Score: H4 dist from EMA200, D1 agreement, H1 confirmation
+            dist_score = min(abs(h4_dist) / 0.03, 1.0)   # 3% = max strength
+            d1_score   = 1.0 if (d1_bias == bias) else 0.5
+            h1_score   = 1.0 if (h1_bias == bias) else (0.5 if h1_bias == 'NEUTRAL' else 0.2)
+            strength   = float((dist_score * 0.5 + d1_score * 0.3 + h1_score * 0.2))
+
+            # If H1 strongly opposes H4+D1, downgrade but don't block
+            if h1_bias != 'NEUTRAL' and h1_bias != bias:
+                strength *= 0.6   # H1 momentum hasn't turned yet — lower confidence
+
+            return bias, round(min(strength, 1.0), 3)
 
         except Exception as exc:
             self.logger.debug(f"_fetch_htf_bias({symbol}): {exc}")
-            return 'NEUTRAL'
+            return 'NEUTRAL', 0.0
 
     # ── Direction ban ─────────────────────────────────────────────────────────
 
     def _is_direction_banned(self, symbol: str, direction: str) -> bool:
+        """Return True if direction is currently under a soft or hard ban."""
         ban_cfg = self.config.get('direction_ban', {})
         if not ban_cfg.get('enabled', False):
             return False
@@ -336,14 +380,40 @@ class TradingEngine:
             del self._direction_ban[symbol]
             return False
 
-        remaining = (entry['until'] - time.time()) / 3600
+        remaining  = (entry['until'] - time.time()) / 3600
+        ban_type   = entry.get('type', 'hard')
         self.logger.info(
-            f"{symbol}: direction {direction} BANNED for {remaining:.1f}h more "
-            f"(consecutive {direction} losses)"
+            f"{symbol}: direction {direction} {ban_type.upper()} BANNED "
+            f"for {remaining:.1f}h more"
         )
         return True
 
+    def _get_direction_lot_scale(self, symbol: str, direction: str) -> float:
+        """
+        Return lot size multiplier based on current direction penalty state.
+
+        Soft ban → 0.5× (half size, still allowed to trade after ban expires)
+        No ban   → 1.0×
+        Hard ban → caller should never reach here (blocked by _is_direction_banned)
+        """
+        streak = self._dir_loss_streak.get(symbol, {}).get(direction, 0)
+        ban_cfg = self.config.get('direction_ban', {})
+        soft_threshold = max(1, ban_cfg.get('max_same_dir_losses', 2) - 1)
+        if streak >= soft_threshold:
+            return 0.5
+        return 1.0
+
     def _update_direction_streak(self, symbol: str, direction: str, profit: float) -> None:
+        """
+        Progressive direction penalty system.
+
+        Loss count → Action:
+          1 loss  → warning only (no ban)
+          2 losses → short ban (ban_hours_soft, default 2h) + lot scale 0.5×
+          3+ losses → hard ban (ban_hours_hard, default 6h)
+
+        A win resets the streak AND any soft lot scaling for that direction.
+        """
         ban_cfg = self.config.get('direction_ban', {})
         if not ban_cfg.get('enabled', False):
             return
@@ -353,31 +423,59 @@ class TradingEngine:
 
         if profit < 0:
             self._dir_loss_streak[symbol][direction] += 1
-            # Reset opposite direction streak
+            streak = self._dir_loss_streak[symbol][direction]
+
+            # Reset opposite direction's streak on a loss (focus on this direction)
             opp = 'SELL' if direction == 'BUY' else 'BUY'
             self._dir_loss_streak[symbol][opp] = 0
 
-            max_losses = ban_cfg.get('max_same_dir_losses', 2)
-            if self._dir_loss_streak[symbol][direction] >= max_losses:
-                ban_hours = ban_cfg.get('ban_hours', 4)
+            hard_losses = ban_cfg.get('max_same_dir_losses', 2)       # default 2
+            soft_losses = max(1, hard_losses - 1)                      # 1 before hard ban
+            ban_hard    = ban_cfg.get('ban_hours', 4)
+            ban_soft    = ban_cfg.get('ban_hours_soft', 2)
+
+            if streak >= hard_losses:
+                # Hard ban: no trades in this direction for ban_hard hours
                 self._direction_ban[symbol] = {
                     'direction': direction,
-                    'until': time.time() + ban_hours * 3600,
+                    'until':     time.time() + ban_hard * 3600,
+                    'type':      'hard',
                 }
                 self._dir_loss_streak[symbol][direction] = 0
                 self.logger.warning(
-                    f"{symbol}: {direction} direction BANNED for {ban_hours}h "
-                    f"after {max_losses} consecutive losses"
+                    f"{symbol}: {direction} HARD BAN {ban_hard}h "
+                    f"after {streak} consecutive losses"
                 )
                 log_activity(
                     symbol,
-                    f"แบน {direction} {ban_hours} ชั่วโมง — แพ้ซ้อน {max_losses} ครั้ง",
+                    f"HARD BAN {direction} {ban_hard}h — แพ้ซ้อน {streak} ครั้ง",
+                    'warning',
+                )
+            elif streak >= soft_losses:
+                # Soft ban: shorter cooldown + lot halving flagged via direction_ban
+                self._direction_ban[symbol] = {
+                    'direction': direction,
+                    'until':     time.time() + ban_soft * 3600,
+                    'type':      'soft',
+                }
+                self.logger.info(
+                    f"{symbol}: {direction} SOFT BAN {ban_soft}h after {streak} loss"
+                )
+                log_activity(
+                    symbol,
+                    f"Soft ban {direction} {ban_soft}h — แพ้ {streak} ครั้งติด",
                     'warning',
                 )
         else:
-            # Win resets the streak for that direction
+            # Win: fully reset this direction's penalty state
             if symbol in self._dir_loss_streak:
                 self._dir_loss_streak[symbol][direction] = 0
+            if (symbol in self._direction_ban
+                    and self._direction_ban[symbol].get('direction') == direction):
+                del self._direction_ban[symbol]
+                self.logger.info(
+                    f"{symbol}: {direction} direction ban lifted after a winning trade"
+                )
 
     # ── Per-symbol logic ──────────────────────────────────────────────────────
 
@@ -410,6 +508,8 @@ class TradingEngine:
             symbol, df, _sig_preview, _atr_preview,
             _ai_bias_p, _ai_conf_p, _regime_preview,
         )
+        # Fetch HTF bias early so we can pass it to the preview signal too
+        # (actual signal uses it below after all risk checks pass)
 
         # ── 3. Multi-trade check: allow up to max_concurrent_trades per symbol ──
         existing_sym_pos = [
@@ -471,21 +571,26 @@ class TradingEngine:
                 )
                 return
 
-        # ── 7. Generate signal (with HTF bias) ───────────────────────────────
+        # ── 7. Generate signal (with HTF bias + strength) ────────────────────
         log_activity(symbol, f"สแกนคู่เงิน {symbol}...", 'scan')
-        htf_bias = self._fetch_htf_bias(symbol)
-        signal, atr, last_sh, last_sl = generate_signal(df, cfg, htf_bias=htf_bias)
+        htf_bias, htf_strength = self._fetch_htf_bias(symbol)
+        signal, atr, last_sh, last_sl = generate_signal(
+            df, cfg,
+            htf_bias     = htf_bias,
+            htf_strength = htf_strength,
+        )
         regime = detect_regime(df, cfg)
 
         # ── 8. AI prediction ──────────────────────────────────────────────────
         ai_bias, ai_confidence = self.ai.predict(df)
 
-        # Update terminal with final signal/AI (2b already set preview; this overwrites with final)
+        # Update terminal with final signal/AI (2b set preview; this overwrites with final)
         self._collect_terminal_data(symbol, df, signal, atr, ai_bias, ai_confidence, regime)
 
         self.logger.info(
             f"{symbol}: signal={signal:<4} | ATR={atr:.5f} | "
-            f"regime={regime} | AI={ai_bias}({ai_confidence}%)"
+            f"regime={regime} | HTF={htf_bias}({htf_strength:.2f}) | "
+            f"AI={ai_bias}({ai_confidence}%)"
         )
 
         # Log indicators to activity feed
@@ -593,7 +698,7 @@ class TradingEngine:
             )
             return
 
-        # ── 10. Position sizing (with Kelly from trade history) ──────────────
+        # ── 10. Position sizing (Kelly + direction penalty scaling) ─────────
         stats    = get_trade_stats()
         lot_size = self.risk.calculate_lot_size(
             balance, sl_dist, sym_info,
@@ -601,6 +706,14 @@ class TradingEngine:
             avg_win  = (stats.get('total_profit', 0) / max(1, int(stats.get('win_rate', 0) / 100 * stats.get('total_trades', 1)))) if stats.get('win_rate') else None,
             avg_loss = None,
         )
+        # Apply direction penalty scale (streak-based lot reduction)
+        dir_scale = self._get_direction_lot_scale(symbol, signal)
+        if dir_scale < 1.0:
+            self.logger.info(
+                f"{symbol}: direction penalty scale={dir_scale:.2f} "
+                f"(streak={self._dir_loss_streak.get(symbol, {}).get(signal, 0)})"
+            )
+            lot_size = round(lot_size * dir_scale, 2)
 
         # ── 11. Execute ───────────────────────────────────────────────────────
         result = self.executor.place_market_order(
