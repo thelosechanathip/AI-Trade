@@ -6,17 +6,18 @@ Regimes (ADX-based):
   RANGE    : ADX < 20  — use mean-reversion (BB + Stochastic + RSI extremes)
   HIGH_VOL : ADX >= 42 — trend-following with reduced size
 
-Signal pipeline (new v2.4):
-  1. Session filter           (REQUIRED)
-  2. Market context analysis  → trend direction, strength, exhaustion risk
-  3. Trend dominance protection (HARD BLOCK) — prevents counter-trend in strong moves
-  4. EMA trend filter         (REQUIRED, HTF-aware)
-  5. Entry momentum gate      (HARD BLOCK) — 2-bar candle direction
-  6. RSI recovery check       (HARD BLOCK) — block SELL if RSI recovering from oversold
-  7. Confluence scoring       (5 conditions, need >= min_confluence)
-  8. HTF bias guard           (HARD BLOCK) — final check against H4+D1 trend
+Signal pipeline (v2.5 — with MarketIntelligence):
+  1. Session filter            (REQUIRED)
+  2. Market context analysis   → trend direction, strength, exhaustion risk
+  3. MarketIntelligence analysis → institutional signals, divergence, BOS/CHOCH
+  4. Trend dominance protection (HARD BLOCK) — prevents counter-trend in strong moves
+  5. EMA trend filter          (REQUIRED, HTF-aware)
+  6. Entry momentum gate       (HARD BLOCK) — 2-bar candle direction
+  7. RSI recovery/rejection gate (HARD BLOCK)
+  8. Confluence scoring        (5 conditions, need >= min_confluence)
+  9. HTF bias guard            (HARD BLOCK) — final check against H4+D1 trend
 
-Returns: signal ('BUY' | 'SELL' | 'HOLD'), atr, last_swing_high, last_swing_low
+Returns: (signal, atr, last_swing_high, last_swing_low, mi_narrative)
 """
 
 import logging
@@ -28,8 +29,12 @@ import numpy as np
 import pandas as pd
 
 from utils import compute_indicators, detect_market_structure
+from market_intelligence import MarketIntelligence, MarketNarrative
 
 logger = logging.getLogger('AI-Trade')
+
+# Module-level singleton — instantiated once, reused every cycle
+_mi = MarketIntelligence()
 
 
 # ── Data structures ───────────────────────────────────────────────────────────
@@ -321,61 +326,63 @@ def _range_signal(
 
 # ── Signal generation ─────────────────────────────────────────────────────────
 
+_NULL_NARRATIVE = MarketNarrative(narrative='no data')
+
+
 def generate_signal(
     df: pd.DataFrame,
     config: dict,
     bar_time: Optional[datetime] = None,
     htf_bias: str = 'NEUTRAL',
     htf_strength: float = 0.0,
-) -> Tuple[str, float, float, float]:
+) -> Tuple[str, float, float, float, MarketNarrative]:
     """
-    Regime-adaptive, bias-balanced signal generation (v2.4).
+    Regime-adaptive, bias-balanced signal generation (v2.5).
 
     Pipeline (all layers in order — any HARD BLOCK returns HOLD immediately):
       1. Session filter
       2. Market context build (regime, trend_dir, strength, exhaustion, RSI states)
-      3. Trend dominance protection (hard block counter-trend in strong moves)
-      4. EMA trend filter (HTF-aware: relaxed when HTF confirms direction)
-      5. RANGE mode branch (mean-reversion path)
-      6. Entry momentum gate (2-bar candle direction check)
-      7. RSI recovery/rejection gate
-      8. Confluence scoring (5 conditions, need >= min_confluence)
-      9. Final HTF guard
+      3. MarketIntelligence analysis (institutional signals, divergence, BOS/CHOCH)
+      4. Trend dominance protection (hard block counter-trend in strong moves)
+      5. EMA trend filter (HTF-aware: relaxed when HTF confirms direction)
+      6. RANGE mode branch (mean-reversion path)
+      7. Entry momentum gate (2-bar candle direction check)
+      8. RSI recovery/rejection gate
+      9. Confluence scoring (5 conditions, need >= min_confluence)
+     10. Final HTF guard
 
     Args:
-        df:          M15 OHLCV + computed indicators
-        config:      full config dict
-        bar_time:    current bar time (for session filter)
-        htf_bias:    'BUY' | 'SELL' | 'NEUTRAL' from higher-timeframe filter
-        htf_strength: 0.0–1.0, strength of HTF trend (from _fetch_htf_bias)
+        df:           M15 OHLCV + computed indicators
+        config:       full config dict
+        bar_time:     current bar time (for session filter)
+        htf_bias:     'BUY' | 'SELL' | 'NEUTRAL' from higher-timeframe filter
+        htf_strength: 0.0-1.0, strength of HTF trend
 
     Returns:
-        (signal, atr, last_swing_high, last_swing_low)
+        (signal, atr, last_swing_high, last_swing_low, mi_narrative)
     """
     s = config['strategy']
 
     min_bars = s['ema_slow'] + s['atr_period'] + s['structure_lookback'] * 4 + 20
     if len(df) < min_bars:
-        return 'HOLD', 0.0, 0.0, 0.0
+        return 'HOLD', 0.0, 0.0, 0.0, _NULL_NARRATIVE
 
     df = compute_indicators(df, config)
     if len(df) < 4:
-        return 'HOLD', 0.0, 0.0, 0.0
+        return 'HOLD', 0.0, 0.0, 0.0, _NULL_NARRATIVE
 
     latest = df.iloc[-1]
 
     # ── 1. Session filter ─────────────────────────────────────────────────────
     if not check_session_filter(config, bar_time):
-        return 'HOLD', float(latest.get('atr', 0.0)), 0.0, 0.0
+        return 'HOLD', float(latest.get('atr', 0.0)), 0.0, 0.0, _NULL_NARRATIVE
 
     # ── 2. Build market context ───────────────────────────────────────────────
     ctx = build_market_context(df, config)
     htf_upper = htf_bias.upper()
 
-    # ── 3. Trend dominance protection (hard block) ────────────────────────────
-    # Check both BUY and SELL candidate before committing to a direction.
-    # This is evaluated again per-direction later; this early check catches cases
-    # where we can short-circuit before running the full confluence scoring.
+    # ── 3. MarketIntelligence analysis ────────────────────────────────────────
+    mi_narrative = _mi.analyze(df, config, htf_bias=htf_upper, htf_strength=htf_strength)
 
     # ── 4. EMA trend filter (direction-gating) ────────────────────────────────
     close  = ctx.close
@@ -383,13 +390,12 @@ def generate_signal(
     ema200 = ctx.ema200
 
     # When HTF confirms the direction, relax EMA200 requirement.
-    # This allows catching the early phase of a trend reversal on M15.
     if htf_upper == 'BUY':
-        trend_up   = close > ema50                            # only need EMA50 alignment
+        trend_up   = close > ema50
         trend_down = (close < ema50) and (close < ema200)
     elif htf_upper == 'SELL':
         trend_up   = (close > ema50) and (close > ema200)
-        trend_down = close < ema50                            # only need EMA50 alignment
+        trend_down = close < ema50
     else:
         trend_up   = (close > ema50) and (close > ema200)
         trend_down = (close < ema50) and (close < ema200)
@@ -398,20 +404,28 @@ def generate_signal(
     if ctx.regime == 'RANGE':
         raw_sig, raw_atr, sh, sl = _range_signal(df, config, ctx)
         if raw_sig == 'HOLD':
-            return 'HOLD', raw_atr, sh, sl
+            return 'HOLD', raw_atr, sh, sl, mi_narrative
 
-        # Apply trend dominance check even in RANGE (no counter-trend mean-rev in strong trend)
+        # MI block check for RANGE signals
+        if raw_sig == 'BUY' and mi_narrative.block_buy:
+            logger.debug(f"MI blocked RANGE BUY: {mi_narrative.block_reason}")
+            return 'HOLD', raw_atr, sh, sl, mi_narrative
+        if raw_sig == 'SELL' and mi_narrative.block_sell:
+            logger.debug(f"MI blocked RANGE SELL: {mi_narrative.block_reason}")
+            return 'HOLD', raw_atr, sh, sl, mi_narrative
+
+        # Apply trend dominance check even in RANGE
         blocked, reason = _trend_dominance_blocked(raw_sig, ctx, htf_upper, config)
         if blocked:
             logger.debug(f"RANGE trend-dominance blocked {raw_sig}: {reason}")
-            return 'HOLD', raw_atr, sh, sl
+            return 'HOLD', raw_atr, sh, sl, mi_narrative
 
-        # HTF guard for range: block signals that oppose a non-neutral HTF bias
+        # HTF guard for range signals
         if htf_upper != 'NEUTRAL' and raw_sig != htf_upper:
             logger.debug(f"HTF guard (RANGE): blocked {raw_sig}, H4 bias={htf_upper}")
-            return 'HOLD', raw_atr, sh, sl
+            return 'HOLD', raw_atr, sh, sl, mi_narrative
 
-        return raw_sig, raw_atr, sh, sl
+        return raw_sig, raw_atr, sh, sl, mi_narrative
 
     # ── TREND / HIGH_VOL: require price on correct side of EMA ───────────────
     if not trend_up and not trend_down:
@@ -419,20 +433,26 @@ def generate_signal(
             f"HOLD: price between EMAs "
             f"(close={close:.1f} ema50={ema50:.1f} ema200={ema200:.1f})"
         )
-        return 'HOLD', ctx.atr, 0.0, 0.0
+        return 'HOLD', ctx.atr, 0.0, 0.0, mi_narrative
 
     # Determine candidate direction from EMA filter
     candidate = 'BUY' if trend_up else 'SELL'
+
+    # ── MarketIntelligence hard blocks ────────────────────────────────────────
+    if candidate == 'BUY' and mi_narrative.block_buy:
+        logger.debug(f"MI blocked BUY: {mi_narrative.block_reason}")
+        return 'HOLD', ctx.atr, 0.0, 0.0, mi_narrative
+    if candidate == 'SELL' and mi_narrative.block_sell:
+        logger.debug(f"MI blocked SELL: {mi_narrative.block_reason}")
+        return 'HOLD', ctx.atr, 0.0, 0.0, mi_narrative
 
     # ── Trend dominance protection (hard block) ───────────────────────────────
     blocked, reason = _trend_dominance_blocked(candidate, ctx, htf_upper, config)
     if blocked:
         logger.debug(f"Trend dominance blocked {candidate}: {reason}")
-        return 'HOLD', ctx.atr, 0.0, 0.0
+        return 'HOLD', ctx.atr, 0.0, 0.0, mi_narrative
 
     # ── 5. Entry momentum gate (hard block) ───────────────────────────────────
-    # Block SELL if last 2 completed bars were BOTH bullish (price bouncing).
-    # Block BUY  if last 2 completed bars were BOTH bearish (price dumping).
     if len(df) >= 4:
         b1 = df.iloc[-3]
         b2 = df.iloc[-2]
@@ -443,29 +463,27 @@ def generate_signal(
                 f"Momentum gate: blocked SELL — 2 consecutive bullish bars "
                 f"(close={close:.1f})"
             )
-            return 'HOLD', ctx.atr, 0.0, 0.0
+            return 'HOLD', ctx.atr, 0.0, 0.0, mi_narrative
         if candidate == 'BUY' and (not b1_bull) and (not b2_bull):
             logger.debug(
                 f"Momentum gate: blocked BUY — 2 consecutive bearish bars "
                 f"(close={close:.1f})"
             )
-            return 'HOLD', ctx.atr, 0.0, 0.0
+            return 'HOLD', ctx.atr, 0.0, 0.0, mi_narrative
 
     # ── 6. RSI recovery / rejection gate (hard block) ─────────────────────────
-    # RSI rising sharply from oversold → shorts are losing momentum → no SELL
     if candidate == 'SELL' and ctx.rsi_recovering:
         logger.debug(
             f"RSI recovery gate: blocked SELL "
-            f"(RSI {ctx.rsi_prev:.1f}→{ctx.rsi:.1f}, recovering from oversold)"
+            f"(RSI {ctx.rsi_prev:.1f}->{ctx.rsi:.1f}, recovering from oversold)"
         )
-        return 'HOLD', ctx.atr, 0.0, 0.0
-    # RSI falling sharply from overbought → longs losing momentum → no BUY
+        return 'HOLD', ctx.atr, 0.0, 0.0, mi_narrative
     if candidate == 'BUY' and ctx.rsi_rejecting:
         logger.debug(
             f"RSI rejection gate: blocked BUY "
-            f"(RSI {ctx.rsi_prev:.1f}→{ctx.rsi:.1f}, rejecting from overbought)"
+            f"(RSI {ctx.rsi_prev:.1f}->{ctx.rsi:.1f}, rejecting from overbought)"
         )
-        return 'HOLD', ctx.atr, 0.0, 0.0
+        return 'HOLD', ctx.atr, 0.0, 0.0, mi_narrative
 
     # ── 7. Confluence scoring ─────────────────────────────────────────────────
     rsi       = ctx.rsi
@@ -524,8 +542,8 @@ def generate_signal(
     failed    = [k for k, v in conds.items() if not v]
     logger.debug(
         f"Signal ({direction}|{ctx.regime}) RSI={rsi:.1f} ADX={ctx.adx:.1f} "
-        f"strength={ctx.trend_strength:.2f} "
-        f"MACD_hist={macd_hist:.5f}(Δ{macd_hist - ctx.macd_hist_prev:+.5f}) "
+        f"strength={ctx.trend_strength:.2f} MI_regime={mi_narrative.regime} "
+        f"MACD_hist={macd_hist:.5f}(d{macd_hist - ctx.macd_hist_prev:+.5f}) "
         f"score={score}/{len(conds)} need={min_score} "
         f"passed={passed} failed={failed}"
     )
@@ -534,13 +552,13 @@ def generate_signal(
     if buy_ok:
         if htf_upper == 'SELL':
             logger.debug(f"HTF guard: blocked BUY, H4 bias=SELL strength={htf_strength:.2f}")
-            return 'HOLD', ctx.atr, last_sh, last_sl
-        return 'BUY', ctx.atr, last_sh, last_sl
+            return 'HOLD', ctx.atr, last_sh, last_sl, mi_narrative
+        return 'BUY', ctx.atr, last_sh, last_sl, mi_narrative
 
     if sell_ok:
         if htf_upper == 'BUY':
             logger.debug(f"HTF guard: blocked SELL, H4 bias=BUY strength={htf_strength:.2f}")
-            return 'HOLD', ctx.atr, last_sh, last_sl
-        return 'SELL', ctx.atr, last_sh, last_sl
+            return 'HOLD', ctx.atr, last_sh, last_sl, mi_narrative
+        return 'SELL', ctx.atr, last_sh, last_sl, mi_narrative
 
-    return 'HOLD', ctx.atr, last_sh, last_sl
+    return 'HOLD', ctx.atr, last_sh, last_sl, mi_narrative

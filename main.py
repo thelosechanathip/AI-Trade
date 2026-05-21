@@ -501,7 +501,7 @@ class TradingEngine:
         self.ai.update_online_model(df)
 
         # ── 2b. Always collect terminal data so dashboard stays live ──────────
-        _sig_preview, _atr_preview, _, _ = generate_signal(df, cfg)
+        _sig_preview, _atr_preview, _, _, _ = generate_signal(df, cfg)
         _regime_preview = detect_regime(df, cfg)
         _ai_bias_p, _ai_conf_p = self.ai.predict(df)
         self._collect_terminal_data(
@@ -528,6 +528,9 @@ class TradingEngine:
             return
         if not self.risk.check_drawdown_limit(balance):
             self.running = False
+            return
+        if not self.risk.check_adaptive_cooldown():
+            log_activity(symbol, "Adaptive cooldown — พักการเทรดหลังขาดทุนต่อเนื่อง", 'warning')
             return
 
         all_positions = self.executor.get_all_open_positions()
@@ -574,7 +577,7 @@ class TradingEngine:
         # ── 7. Generate signal (with HTF bias + strength) ────────────────────
         log_activity(symbol, f"สแกนคู่เงิน {symbol}...", 'scan')
         htf_bias, htf_strength = self._fetch_htf_bias(symbol)
-        signal, atr, last_sh, last_sl = generate_signal(
+        signal, atr, last_sh, last_sl, mi_narrative = generate_signal(
             df, cfg,
             htf_bias     = htf_bias,
             htf_strength = htf_strength,
@@ -586,12 +589,27 @@ class TradingEngine:
 
         # Update terminal with final signal/AI (2b set preview; this overwrites with final)
         self._collect_terminal_data(symbol, df, signal, atr, ai_bias, ai_confidence, regime)
+        # Append MI data to terminal dict (non-breaking addition)
+        if symbol in self._terminal:
+            self._terminal[symbol]['mi_regime']    = mi_narrative.regime
+            self._terminal[symbol]['mi_narrative'] = mi_narrative.narrative
+            self._terminal[symbol]['mi_signals']   = mi_narrative.signals_active
+            self._terminal[symbol]['mi_quality']   = round(mi_narrative.setup_quality, 2)
+            self._terminal[symbol]['mi_block_buy']  = mi_narrative.block_buy
+            self._terminal[symbol]['mi_block_sell'] = mi_narrative.block_sell
 
         self.logger.info(
             f"{symbol}: signal={signal:<4} | ATR={atr:.5f} | "
-            f"regime={regime} | HTF={htf_bias}({htf_strength:.2f}) | "
+            f"regime={regime} | MI={mi_narrative.regime} | "
+            f"HTF={htf_bias}({htf_strength:.2f}) | "
             f"AI={ai_bias}({ai_confidence}%)"
         )
+        if mi_narrative.signals_active:
+            self.logger.info(
+                f"{symbol}: MI signals={mi_narrative.signals_active} "
+                f"quality={mi_narrative.setup_quality:.2f} "
+                f"block=[buy={mi_narrative.block_buy},sell={mi_narrative.block_sell}]"
+            )
 
         # Log indicators to activity feed
         latest = df.iloc[-1]

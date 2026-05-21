@@ -1,16 +1,19 @@
 """
 risk.py — Position sizing, daily loss tracking, and drawdown enforcement.
 
-Enhancements over v1:
+Enhancements:
   • Kelly fraction sizing (quarter-Kelly, capped)
   • Drawdown scaling — reduce size as drawdown grows
   • Loss-streak protection — cut size after N consecutive losses
   • Safe / Aggressive mode support
   • risk_multiplier() consolidates all scaling into one call
+  • Adaptive global cooldown: progressive pause after consecutive losses
+    1 loss → 2h soft pause, 2 → 4h hard pause, 3 → 12h extended, 4+ → halt
 """
 
 import json
 import logging
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
@@ -32,6 +35,11 @@ class RiskManager:
         self._loss_streak:  int  = 0
         self._last_result:  str  = ''   # 'win' | 'loss' | ''
 
+        # Adaptive global cooldown state
+        self._global_cooldown_until: float = 0.0   # epoch seconds
+        self._global_loss_streak:    int   = 0
+        self._trading_halted:        bool  = False
+
         self._load_state()
 
     # ── Persistence ───────────────────────────────────────────────────────────
@@ -41,11 +49,14 @@ class RiskManager:
             return
         try:
             s = json.loads(_STATE_FILE.read_text())
-            self.initial_balance     = float(s.get('initial_balance',     0.0))
-            self.peak_balance        = float(s.get('peak_balance',        0.0))
-            self.daily_start_balance = float(s.get('daily_start_balance', 0.0))
-            self._loss_streak        = int(s.get('loss_streak',           0))
-            self._current_day        = date.fromisoformat(
+            self.initial_balance          = float(s.get('initial_balance',          0.0))
+            self.peak_balance             = float(s.get('peak_balance',             0.0))
+            self.daily_start_balance      = float(s.get('daily_start_balance',      0.0))
+            self._loss_streak             = int(s.get('loss_streak',                0))
+            self._global_loss_streak      = int(s.get('global_loss_streak',         0))
+            self._global_cooldown_until   = float(s.get('global_cooldown_until',    0.0))
+            self._trading_halted          = bool(s.get('trading_halted',            False))
+            self._current_day             = date.fromisoformat(
                 s.get('current_day', str(datetime.now().date()))
             )
         except Exception as exc:
@@ -54,11 +65,14 @@ class RiskManager:
     def _save_state(self) -> None:
         _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         _STATE_FILE.write_text(json.dumps({
-            'initial_balance':     self.initial_balance,
-            'peak_balance':        self.peak_balance,
-            'daily_start_balance': self.daily_start_balance,
-            'current_day':         str(self._current_day),
-            'loss_streak':         self._loss_streak,
+            'initial_balance':        self.initial_balance,
+            'peak_balance':           self.peak_balance,
+            'daily_start_balance':    self.daily_start_balance,
+            'current_day':            str(self._current_day),
+            'loss_streak':            self._loss_streak,
+            'global_loss_streak':     self._global_loss_streak,
+            'global_cooldown_until':  self._global_cooldown_until,
+            'trading_halted':         self._trading_halted,
         }))
 
     # ── Balance update ────────────────────────────────────────────────────────
@@ -83,19 +97,92 @@ class RiskManager:
         self._save_state()
 
     def record_trade_result(self, profit: float) -> None:
-        """Call after each trade closes to update loss-streak counter."""
+        """Call after each trade closes to update loss-streak and adaptive cooldown."""
         if profit > 0:
-            self._loss_streak = 0
-            self._last_result = 'win'
+            self._loss_streak        = 0
+            self._global_loss_streak = 0
+            self._last_result        = 'win'
+            # A win lifts both halts and cooldowns
+            if self._trading_halted:
+                self._trading_halted = False
+                logger.info("Adaptive cooldown: trading halt LIFTED after winning trade")
+            if self._global_cooldown_until > time.time():
+                self._global_cooldown_until = 0.0
+                logger.info("Adaptive cooldown: global cooldown cleared after win")
         else:
-            self._loss_streak += 1
-            self._last_result = 'loss'
+            self._loss_streak        += 1
+            self._global_loss_streak += 1
+            self._last_result         = 'loss'
             if self._loss_streak >= self._cfg.get('max_loss_streak', 3):
                 logger.warning(
                     f"Loss streak: {self._loss_streak} consecutive losses — "
                     "switching to safe-mode sizing"
                 )
+            self._apply_adaptive_cooldown()
         self._save_state()
+
+    def _apply_adaptive_cooldown(self) -> None:
+        """
+        Progressive global pause after consecutive losses (any direction/symbol).
+
+        Streak → Cooldown:
+          1 loss  → 2h soft pause
+          2 losses → 4h hard pause
+          3 losses → 12h extended pause
+          4+ losses → trading halt (manual reset required)
+        """
+        cd_cfg = self._cfg.get('adaptive_cooldown', {})
+        if not cd_cfg.get('enabled', True):
+            return
+
+        streak    = self._global_loss_streak
+        hours_map = cd_cfg.get('hours_map', {1: 2, 2: 4, 3: 12})
+        halt_at   = cd_cfg.get('halt_at_streak', 4)
+
+        if streak >= halt_at:
+            self._trading_halted = True
+            logger.critical(
+                f"ADAPTIVE COOLDOWN: Trading HALTED after {streak} consecutive losses. "
+                "Manual reset required (delete data/risk_state.json or restart with reset)."
+            )
+            return
+
+        cooldown_h = hours_map.get(streak, 0)
+        if cooldown_h > 0:
+            self._global_cooldown_until = time.time() + cooldown_h * 3600
+            level = {1: 'soft', 2: 'hard', 3: 'extended'}.get(streak, 'hard')
+            logger.warning(
+                f"ADAPTIVE COOLDOWN: {level.upper()} pause {cooldown_h}h "
+                f"after {streak} consecutive loss(es). "
+                f"Resumes at {datetime.fromtimestamp(self._global_cooldown_until).strftime('%H:%M:%S')}"
+            )
+
+    def check_adaptive_cooldown(self) -> bool:
+        """
+        Returns True if trading is allowed, False if in adaptive cooldown/halt.
+        Call this before attempting any new trade.
+        """
+        if self._trading_halted:
+            logger.warning("ADAPTIVE COOLDOWN: Trading is HALTED — manual reset required")
+            return False
+
+        if self._global_cooldown_until > time.time():
+            remaining_h = (self._global_cooldown_until - time.time()) / 3600
+            logger.info(
+                f"ADAPTIVE COOLDOWN: Global cooldown active — "
+                f"{remaining_h:.1f}h remaining"
+            )
+            return False
+
+        return True
+
+    def reset_adaptive_halt(self) -> None:
+        """Manually reset a trading halt (for admin use after review)."""
+        self._trading_halted        = False
+        self._global_loss_streak    = 0
+        self._global_cooldown_until = 0.0
+        self._save_state()
+        logger.info("Adaptive cooldown reset — trading re-enabled")
 
     # ── Guard checks ──────────────────────────────────────────────────────────
 

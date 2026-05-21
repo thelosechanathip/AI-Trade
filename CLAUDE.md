@@ -1,42 +1,100 @@
-# CLAUDE.md — AI-Trade Project Guide
+# CLAUDE.md
 
-**โครงการ:** AI-Trade — ระบบเทรด XAUUSD อัตโนมัติ 100% ด้วย AI + ML (Local)
+# AI-Trade — ระบบเทรดทองอัตโนมัติ (XAUUSD)
 
-**ภาษาหลัก:** Python 3.11+ + MetaTrader 5 Python API  
-**สไตล์การพัฒนา:** Clean, modular, production-ready, safety-first
-
----
-
-## ภาพรวมโครงการ
-
-ระบบเทรดทองคำ (XAUUSD) แบบอัตโนมัติเต็มรูปแบบบน MT5 โดยใช้ AI/ML แบบ Local ทั้งหมด ไม่พึ่ง Cloud
-
-**จุดเด่นหลัก:**
-- Multi-layer signal + Regime Detection (Trend/Range/HighVol)
-- Ensemble AI (XGBoost + LightGBM + RF + LSTM + RL DQN)
-- Self-learning loop + Online learning + Market Memory
-- Risk Management ที่เข้มงวด (Kelly, Drawdown Scaling, Daily Limit ฯลฯ)
-- Real-time Dashboard (FastAPI + WebSocket)
-- Backtesting + Walk-forward + Monte Carlo + Optuna
+ระบบเทรด XAUUSD (ทองคำ) อัตโนมัติ 100% บน MetaTrader 5  
+ขับเคลื่อนด้วย AI และ Machine Learning แบบ Local ไม่พึ่งพา Cloud
 
 ---
 
-## โครงสร้างสำคัญ (สำคัญที่สุดสำหรับ Claude)
+## Overview
 
-```bash
-AI-Trade/
-├── main.py                 # ← Entry point ของ trading loop (60 วินาที)
-├── strategy.py             # Signal generation + Regime + Confluence Scoring
-├── ai_model.py             # Ensemble, LSTM, RL, Online SGD, AI Filter Logic
-├── execution_mt5.py        # MT5 order placement / modification / close
-├── trade_manager.py        # Breakeven, Trailing, Partial close, Time exit
-├── risk.py                 # Kelly, Drawdown, Loss streak, Direction ban
-├── utils.py                # Indicators, DB, Logging, Helpers
-├── web_app.py              # FastAPI + WebSocket สำหรับ Dashboard
-├── rl_agent.py
-├── market_memory.py
-├── backtest.py
-├── auto_optimizer.py
-├── config.yaml             # ← แก้ไขการตั้งค่าที่นี่เป็นหลัก
-├── run.py                  # Launcher
-└── start.bat
+AI-Trade เป็นระบบ Algorithmic Trading สำหรับ MetaTrader 5 ที่ออกแบบมาเพื่อ:
+
+- เทรดทองคำอัตโนมัติ
+- วิเคราะห์สัญญาณหลายชั้น
+- ใช้ AI + Machine Learning + Reinforcement Learning
+- บริหารความเสี่ยงแบบมืออาชีพ
+- มี Dashboard Real-time
+- รองรับ Backtest / Optimization / Walk-forward
+
+Engine Version: `v2.4`
+
+---
+
+# Core Features
+
+## Automated Trading
+
+- เปิด/ปิดออเดอร์ผ่าน MT5 Python API
+- รองรับ BUY / SELL ทั้งสองทิศทาง
+- Scan ตลาดทุก 60 วินาที
+- รองรับ 24h หรือเฉพาะ London / NY Session
+- News Filter:
+  - หยุดเทรดก่อนข่าวแรง 30 นาที
+  - กลับมาเทรดหลังข่าว 15 นาที
+- Cooldown:
+  - เว้นระยะ 60 นาทีต่อ symbol
+
+---
+
+# Signal Pipeline (v2.4)
+
+ระบบใช้ Pipeline วิเคราะห์สัญญาณ 8 ชั้น
+
+หากชั้นใดไม่ผ่าน → HOLD ทันที
+
+| Layer | Name | Description |
+|---|---|---|
+| 1 | Session Filter | กรองช่วงเวลาเทรด |
+| 2 | Market Context | วิเคราะห์ regime / trend / RSI / exhaustion |
+| 3 | Trend Dominance Protection | ป้องกันสวนเทรนด์ |
+| 4 | EMA Trend Filter | HTF-aware EMA filtering |
+| 5 | Entry Momentum Gate | ตรวจ momentum ล่าสุด |
+| 6 | RSI Recovery Gate | ป้องกัน exhaustion |
+| 7 | Confluence Scoring | ต้องผ่าน ≥3/5 |
+| 8 | Final HTF Guard | ตรวจ bias หลาย timeframe |
+
+---
+
+# Trend Dominance Protection
+
+ระบบ block ทันทีใน 3 กรณี:
+
+## 1. HTF Conflict + Strong ADX
+
+- H4 บอก SELL แต่ signal BUY
+- และ ADX ≥ 28
+
+→ BLOCK
+
+---
+
+## 2. Short Exhaustion
+
+- ราคาอยู่ต่ำกว่า EMA200 มากกว่า 2.5%
+
+→ BLOCK SELL
+
+---
+
+## 3. RSI Recovery
+
+- RSI เด้งจาก oversold มากกว่า 5 จุด
+
+→ BLOCK SELL
+
+---
+
+# HTF Filter
+
+| TF | Indicator | Purpose |
+|---|---|---|
+| H4 | EMA200 | Mid trend |
+| D1 | EMA50 | Macro trend |
+| H1 | EMA50 | Intraday bridge |
+
+ทุก layer คืนค่า:
+
+```python
+(bias, strength)

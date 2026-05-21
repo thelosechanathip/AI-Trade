@@ -25,6 +25,13 @@ risk:
   mode: "normal"
   safe_risk_multiplier: 0.50
   aggressive_risk_multiplier: 1.25
+  adaptive_cooldown:
+    enabled: true
+    hours_map:                 # streak -> hours of global pause
+      1: 2                     # 1 consecutive loss  → 2h soft pause
+      2: 4                     # 2 consecutive losses → 4h hard pause
+      3: 12                    # 3 consecutive losses → 12h extended pause
+    halt_at_streak: 4          # 4+ losses → full halt (manual reset required)
 
 strategy:
   ema_fast: 50
@@ -135,6 +142,14 @@ trend_dominance:
   rsi_recovery_level:     38     # RSI ต่ำกว่า 38 แล้วเด้งขึ้น = shorts exhausted
   rsi_rejection_level:    62     # RSI สูงกว่า 62 แล้วตกลง = longs exhausted
   rsi_momentum_swing:      5     # RSI ต้องขยับ ≥ 5 pts ถึงนับเป็น recovery/rejection
+
+market_intelligence:
+  enabled: true
+  adx_strong: 28               # ADX threshold for "strong trend" regime
+  divergence_lookback: 35      # bars to look back for RSI/MACD divergence
+  swing_strength: 3            # swing point detection sensitivity (lower = more sensitive)
+  displacement_atr_mult: 2.0   # body must be >= N×ATR to count as displacement candle
+  reversal_score_threshold: 2  # how many reversal sub-signals needed to fire REVERSAL regime
 
 dashboard:
   refresh_interval: 5

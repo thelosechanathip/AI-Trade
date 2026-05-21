@@ -180,7 +180,7 @@ class BacktestEngine:
 
         window   = df.iloc[: i + 1].copy()
         bar_time = bar.name
-        signal, atr, last_sh, last_sl = generate_signal(window, self.config, bar_time)
+        signal, atr, last_sh, last_sl, _mi_narr = generate_signal(window, self.config, bar_time)
 
         if signal == 'HOLD' or atr <= 0:
             return
