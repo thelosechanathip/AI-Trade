@@ -53,6 +53,15 @@ class BrainDecision:
     # Derived risk adjustment (used by RiskManager)
     risk_multiplier_adj: float = 1.0
 
+    # Emergency block: TRUE only for extreme risk conditions.
+    # Respected at ALL autonomy levels (even RULE_BASED=0).
+    # Must not be triggered by routine low confidence — only for:
+    #   reversal_probability ≥ 0.72 AND uncertainty ≥ 0.78
+    emergency_block: bool = False
+
+    # Advisory mode: TRUE when Brain is not the primary decision maker
+    advisory_only: bool = False
+
     def to_dict(self) -> dict:
         return {
             'decision':             self.decision,
@@ -69,6 +78,8 @@ class BrainDecision:
             'hold_reasons':         self.hold_reasons,
             'signals_active':       self.signals_active,
             'risk_multiplier_adj':  round(self.risk_multiplier_adj, 3),
+            'emergency_block':      self.emergency_block,
+            'advisory_only':        self.advisory_only,
         }
 
 
@@ -265,10 +276,16 @@ class MarketBrain:
         MomentumAgent(),
     ]
 
-    # Minimum confidence to emit a directional signal
-    _MIN_CONFIDENCE = 0.52
+    # Minimum confidence thresholds per autonomy level.
+    # At low levels the Brain is advisory — it should NEVER block by confidence alone.
+    # At high levels the Brain is primary — confidence gates every entry.
+    _MIN_CONF_BY_LEVEL = {0: 0.0, 1: 0.30, 2: 0.38, 3: 0.46, 4: 0.52}
 
-    # Minimum entry quality (composite) to skip HOLD
+    # Minimum entry quality per level (composite score of quality + uncertainty)
+    _MIN_QUALITY_BY_LEVEL = {0: 0.0, 1: 0.20, 2: 0.28, 3: 0.35, 4: 0.38}
+
+    # Legacy constants (kept for backward compat) — use level-based ones instead
+    _MIN_CONFIDENCE    = 0.52
     _MIN_ENTRY_QUALITY = 0.38
 
     def __init__(
@@ -287,12 +304,18 @@ class MarketBrain:
         ctx:              BrainContext,
         open_trade_count: int = 0,
         max_trades:       int = 3,
+        autonomy_level:   int = 0,
     ) -> BrainDecision:
+
+        min_conf    = self._MIN_CONF_BY_LEVEL.get(autonomy_level, 0.42)
+        min_quality = self._MIN_QUALITY_BY_LEVEL.get(autonomy_level, 0.28)
+        advisory    = autonomy_level < 3
 
         result = BrainDecision(
             market_regime    = ctx.regime or getattr(ctx.mi_narrative, 'regime', ''),
             market_narrative = getattr(ctx.mi_narrative, 'narrative', ''),
             signals_active   = list(getattr(ctx.mi_narrative, 'signals_active', []) or []),
+            advisory_only    = advisory,
         )
 
         # ── Step 1: Collect agent votes ───────────────────────────────────────
@@ -389,10 +412,12 @@ class MarketBrain:
                 f"Max concurrent trades ({open_trade_count}/{max_trades})"
             )
 
-        # ── Step 9: Minimum confidence gate ──────────────────────────────────
-        if prelim in ('BUY', 'SELL') and result.confidence < self._MIN_CONFIDENCE:
+        # ── Step 9: Minimum confidence gate (level-aware) ────────────────────
+        # At advisory levels (0-2), Brain never blocks by confidence alone.
+        # The strategy engine is still primary — Brain just adjusts risk.
+        if prelim in ('BUY', 'SELL') and result.confidence < min_conf and not advisory:
             result.hold_reasons.append(
-                f"Confidence {result.confidence:.0%} < min {self._MIN_CONFIDENCE:.0%}"
+                f"Confidence {result.confidence:.0%} < min {min_conf:.0%} (L{autonomy_level})"
             )
             prelim = 'HOLD'
 
@@ -408,9 +433,9 @@ class MarketBrain:
             0.0, 1.0,
         ))
 
-        if prelim in ('BUY', 'SELL') and result.entry_quality < self._MIN_ENTRY_QUALITY:
+        if prelim in ('BUY', 'SELL') and result.entry_quality < min_quality and not advisory:
             result.hold_reasons.append(
-                f"Entry quality {result.entry_quality:.0%} too low"
+                f"Entry quality {result.entry_quality:.0%} < min {min_quality:.0%}"
             )
             prelim = 'HOLD'
 
@@ -426,8 +451,28 @@ class MarketBrain:
             result.hold_reasons.append(f"Risk state: {result.risk_state}")
             prelim = 'HOLD'
 
+        # ── Step 13: Emergency block (works at ALL autonomy levels) ──────────
+        # Triggered only when reversal + extreme uncertainty coincide.
+        # Must NOT fire on routine low-confidence cycles — that would
+        # recreate the HOLD deadlock at level 0-2.
+        result.emergency_block = (
+            result.reversal_probability >= 0.72 and
+            result.uncertainty          >= 0.78
+        )
+        if result.emergency_block:
+            result.hold_reasons.append(
+                f"EMERGENCY: rev_prob={result.reversal_probability:.0%} "
+                f"unc={result.uncertainty:.0%}"
+            )
+
+        # ── Advisory mode: clamp risk_multiplier_adj away from zero ──────────
+        # Never fully cancel a trade via risk_adj when Brain is advisory.
+        # The emergency_block mechanism handles true cancellations.
+        if advisory:
+            result.risk_multiplier_adj = max(0.40, result.risk_multiplier_adj)
+
         # ── Finalise ──────────────────────────────────────────────────────────
-        result.decision = prelim
+        result.decision  = prelim
         result.reasoning = self._build_reasoning(result, votes, u_assess)
 
         logger.debug(

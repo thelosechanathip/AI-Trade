@@ -42,9 +42,11 @@ from risk              import RiskManager
 from execution_mt5     import MT5Executor
 from ai_model          import AIModel
 from trade_manager     import TradeManager
-from market_brain      import MarketBrain, BrainContext, BrainDecision
-from exit_intelligence import ExitIntelligence
-from brain_memory      import BrainMemory
+from market_brain        import MarketBrain, BrainContext, BrainDecision
+from exit_intelligence   import ExitIntelligence
+from brain_memory        import BrainMemory
+from confidence_bootstrap import ConfidenceBootstrap
+from cold_start_manager  import ColdStartManager
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -117,9 +119,11 @@ class TradingEngine:
         self.executor      = MT5Executor(self.config)
         self.ai            = AIModel(self.config)
         self.trade_manager = TradeManager(self.config)
-        self.brain_memory  = BrainMemory()
-        self.market_brain  = MarketBrain(self.config, self.brain_memory)
-        self.exit_intel    = ExitIntelligence(self.config)
+        self.brain_memory        = BrainMemory()
+        self.market_brain        = MarketBrain(self.config, self.brain_memory)
+        self.exit_intel          = ExitIntelligence(self.config)
+        self.confidence_bootstrap = ConfidenceBootstrap()
+        self.cold_start_manager  = ColdStartManager(self.config)
 
         self.running              = False
         self._ai_last_train_ts    = 0.0
@@ -675,57 +679,123 @@ class TradingEngine:
             'ai',
         )
 
-        # ── 8b. Market Brain decision (primary decision maker) ───────────────
+        # ── 8b. Market Brain — Context Analysis ──────────────────────────────
+        # Architecture: Rule Engine = Primary Decision Layer
+        #               Brain      = Context Modifier + Risk Intelligence
+        #
+        # The Brain OVERRIDES strategy only at autonomy level ≥ 3.
+        # At levels 0-2, it adjusts risk/sizing without blocking valid entries.
+        # Emergency block fires at ALL levels (only for extreme rev+uncertainty).
+
+        autonomy_level = self.cold_start_manager.current_level
+        latest_row     = df.iloc[-1]
+        adx_val  = float(latest_row.get('adx', 0.0)) if 'adx' in df.columns else 0.0
+        rsi_val  = float(latest_row['rsi']) if 'rsi' in df.columns else 50.0
+        mh_val   = float(latest_row.get('macd_hist', 0.0)) if 'macd_hist' in df.columns else 0.0
+        stk_val  = float(latest_row.get('stoch_k', 50.0)) if 'stoch_k' in df.columns else 50.0
+
         ctx = BrainContext(
-            df           = df,
-            mi_narrative = mi_narrative,
-            htf_bias     = htf_bias,
-            htf_strength = htf_strength,
-            adx          = float(df.iloc[-1].get('adx', 0.0)) if 'adx' in df.columns else 0.0,
-            rsi          = float(df.iloc[-1]['rsi']) if 'rsi' in df.columns else None,
-            macd_hist    = float(df.iloc[-1].get('macd_hist', 0.0)) if 'macd_hist' in df.columns else None,
-            stoch_k      = float(df.iloc[-1].get('stoch_k', 50.0)) if 'stoch_k' in df.columns else None,
-            regime       = regime,
-            ema_trend    = signal,   # rule-based EMA trend expressed as BUY/SELL/HOLD
-            ai_bias      = ai_bias,
-            ai_confidence= float(ai_confidence),
-            rule_signal  = signal,
-            symbol       = symbol,
+            df            = df,
+            mi_narrative  = mi_narrative,
+            htf_bias      = htf_bias,
+            htf_strength  = htf_strength,
+            adx           = adx_val,
+            rsi           = rsi_val,
+            macd_hist     = mh_val,
+            stoch_k       = stk_val,
+            regime        = regime,
+            ema_trend     = signal,
+            ai_bias       = ai_bias,
+            ai_confidence = float(ai_confidence),
+            rule_signal   = signal,
+            symbol        = symbol,
         )
 
         open_count     = len(existing_sym_pos)
         brain_decision = self.market_brain.decide(
-            ctx, open_trade_count=open_count,
-            max_trades=cfg['risk']['max_concurrent_trades'],
+            ctx,
+            open_trade_count = open_count,
+            max_trades       = cfg['risk']['max_concurrent_trades'],
+            autonomy_level   = autonomy_level,
         )
 
-        # Log brain decision
         self.logger.info(
             f"{symbol}: Brain={brain_decision.decision} "
             f"conf={brain_decision.confidence:.0%} "
             f"unc={brain_decision.uncertainty:.0%} "
             f"quality={brain_decision.entry_quality:.0%} "
-            f"regime={brain_decision.market_regime} "
-            f"rev_prob={brain_decision.reversal_probability:.0%}"
+            f"rev={brain_decision.reversal_probability:.0%} "
+            f"L{autonomy_level}({self.cold_start_manager.level_name})"
         )
-        if brain_decision.hold_reasons:
-            self.logger.info(
-                f"{symbol}: Brain HOLD reasons: {brain_decision.hold_reasons}"
-            )
 
-        # Record decision to memory
         try:
             self.brain_memory.record_decision(brain_decision, symbol)
         except Exception:
             pass
 
-        # Use brain decision as final signal
-        signal = brain_decision.decision
-
-        if signal == 'HOLD':
-            hold_summary = '; '.join(brain_decision.hold_reasons[:2]) or 'Brain: no setup'
-            log_activity(symbol, f"HOLD — {hold_summary}", 'info')
+        # ── Emergency block — respected at ALL autonomy levels ────────────────
+        if brain_decision.emergency_block:
+            reason = (brain_decision.hold_reasons[-1]
+                      if brain_decision.hold_reasons else "extreme reversal + uncertainty")
+            log_activity(symbol, f"Brain emergency block: {reason}", 'warning')
             return
+
+        # ── L3-4: Brain is primary — use its decision directly ────────────────
+        if autonomy_level >= 3:
+            signal = brain_decision.decision
+            if signal == 'HOLD':
+                hold_summary = '; '.join(brain_decision.hold_reasons[:2]) or 'no setup'
+                log_activity(symbol, f"Brain HOLD (L{autonomy_level}): {hold_summary}", 'info')
+                return
+
+        # ── L0-2: Strategy is primary — Brain is context advisor ─────────────
+        # Respect the strategy's HOLD signal.
+        if signal == 'HOLD':
+            log_activity(symbol, "รอจังหวะ — ยังไม่มีสัญญาณ", 'info')
+            return
+
+        # ── Bootstrap Confidence + Final Trade Score ──────────────────────────
+        # Blends bootstrap (technical) confidence with Brain (AI) confidence
+        # to produce a single quality gate that works even during cold-start.
+        bootstrap = self.confidence_bootstrap.compute(
+            signal       = signal,
+            htf_bias     = htf_bias,
+            htf_strength = htf_strength,
+            adx          = adx_val,
+            rsi          = rsi_val,
+            macd_hist    = mh_val,
+            stoch_k      = stk_val,
+            regime       = regime,
+            mi_narrative = mi_narrative,
+        )
+
+        bw               = self.cold_start_manager.get_bootstrap_weight()
+        effective_ai     = bootstrap.normalized * bw + brain_decision.confidence * (1.0 - bw)
+        setup_quality    = float(getattr(mi_narrative, 'setup_quality', 0.5))
+        final_score      = setup_quality * 0.60 + effective_ai * 0.40
+        min_score        = self.cold_start_manager.get_min_score_threshold()
+
+        self.logger.info(
+            f"{symbol}: final_score={final_score:.0%} "
+            f"(setup={setup_quality:.0%} ai_eff={effective_ai:.0%} "
+            f"bootstrap={bootstrap.score:.0f}/100 bw={bw:.0%}) "
+            f"min={min_score:.0%}"
+        )
+
+        if final_score < min_score:
+            log_activity(
+                symbol,
+                f"Setup quality {final_score:.0%} < min {min_score:.0%} (L{autonomy_level})",
+                'info',
+            )
+            return
+
+        # Confidence scale for lot sizing (quality → size reduction)
+        if   final_score >= 0.65: conf_scale = 1.00
+        elif final_score >= 0.55: conf_scale = 0.85
+        elif final_score >= 0.45: conf_scale = 0.70
+        elif final_score >= 0.35: conf_scale = 0.55
+        else:                     conf_scale = 0.45
 
         # ── Direction ban check ───────────────────────────────────────────────
         if self._is_direction_banned(symbol, signal):
@@ -758,8 +828,9 @@ class TradingEngine:
 
         log_activity(
             symbol,
-            f"Brain: {signal} conf={brain_decision.confidence:.0%} "
-            f"quality={brain_decision.entry_quality:.0%} | H4={htf_bias}",
+            f"{'Brain' if autonomy_level >= 3 else 'Strategy'}: {signal} "
+            f"score={final_score:.0%} "
+            f"conf={brain_decision.confidence:.0%} | H4={htf_bias} L{autonomy_level}",
             'signal',
         )
 
@@ -814,13 +885,21 @@ class TradingEngine:
                 f"(streak={self._dir_loss_streak.get(symbol, {}).get(signal, 0)})"
             )
             lot_size = round(lot_size * dir_scale, 2)
-        # Apply Brain risk adjustment (uncertainty / reversal probability scaling)
+        # Brain risk state adjustment (never zeros at advisory levels — clamped to 0.40)
         brain_risk_adj = brain_decision.risk_multiplier_adj
         if brain_risk_adj < 1.0:
             lot_size = round(lot_size * brain_risk_adj, 2)
             self.logger.info(
                 f"{symbol}: Brain risk adj={brain_risk_adj:.2f} "
                 f"(state={brain_decision.risk_state})"
+            )
+        # Cold-start + confidence quality scales
+        cold_scale = self.cold_start_manager.get_risk_scale()
+        lot_size   = round(lot_size * cold_scale * conf_scale, 2)
+        if cold_scale < 1.0 or conf_scale < 1.0:
+            self.logger.info(
+                f"{symbol}: lot scaled cold={cold_scale:.2f} "
+                f"conf={conf_scale:.2f} → {lot_size:.2f}"
             )
 
         # ── 11. Execute ───────────────────────────────────────────────────────
@@ -867,6 +946,26 @@ class TradingEngine:
                 'open_time':    datetime.now().isoformat(timespec='seconds'),
                 'ai_confidence': ai_confidence,
             })
+
+    # ── Progressive autonomy level management ────────────────────────────────
+
+    def _check_autonomy_level(self, balance: float) -> None:
+        """
+        Called each main-loop cycle to evaluate whether the system is ready
+        to upgrade to a higher autonomy level (or should downgrade).
+        """
+        try:
+            stats = get_trade_stats()
+            total = int(stats.get('total_trades', 0))
+            wr    = float(stats.get('win_rate', 0)) / 100.0
+            auc   = float(getattr(self.ai, '_last_auc', 0.0) or 0.0)
+            dd    = self.risk.current_drawdown(balance)
+            loss_streak = self.risk._global_loss_streak
+
+            self.cold_start_manager.check_upgrade(total, wr, auc, dd)
+            self.cold_start_manager.check_downgrade(loss_streak, dd)
+        except Exception as exc:
+            self.logger.debug(f"_check_autonomy_level: {exc}")
 
     # ── Exit Intelligence: re-evaluate all open positions ────────────────────
 
@@ -1130,6 +1229,7 @@ class TradingEngine:
                 'today_pnl':    round(self.risk.daily_pnl(account_info.balance), 2),
                 'total_profit': stats.get('total_profit', 0),
             },
+            'autonomy': self.cold_start_manager.get_status(),
         })
 
         # Write AI insights + learning stats separately
@@ -1186,6 +1286,9 @@ class TradingEngine:
                 # Housekeeping
                 self._sync_closed_positions()
                 self._update_dashboard_state(account_info)
+
+                # Progressive autonomy: check upgrade / downgrade each cycle
+                self._check_autonomy_level(balance)
 
                 dd_pct = self.risk.current_drawdown(balance) * 100
                 self.logger.info(

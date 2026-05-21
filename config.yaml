@@ -155,6 +155,29 @@ dashboard:
   refresh_interval: 5
   port: 8001
 
+# ── Progressive Autonomy System ────────────────────────────────────────────
+# Controls how much the AI Brain overrides rule-based strategy signals.
+#
+# Levels:
+#   0  RULE_BASED           — Strategy + MI only; Brain logs and adjusts risk
+#   1  RULE_PLUS_AI_FILTER  — Brain can reduce lot; emergency blocks only
+#   2  AI_ASSISTED          — Brain influences sizing via bootstrap confidence
+#   3  SEMI_AUTONOMOUS      — Brain can override strategy signal
+#   4  FULL_AUTONOMOUS      — Brain is sole decision maker
+#
+# Auto-upgrade when criteria are met; auto-downgrade on 5+ loss streak or DD ≥ 8%.
+progressive_autonomy:
+  enabled: true
+  initial_level: 0           # Start at RULE_BASED to avoid cold-start deadlock
+  max_level: 4               # Maximum allowed level (set to 2 for conservative mode)
+  # Upgrade criteria (cumulative — checked automatically each cycle):
+  #   L0→L1: 10 trades
+  #   L1→L2: 30 trades, AUC ≥ 0.48, winrate ≥ 40%
+  #   L2→L3: 75 trades, AUC ≥ 0.52, winrate ≥ 45%, DD ≤ 10%
+  #   L3→L4: 150 trades, AUC ≥ 0.55, winrate ≥ 50%, DD ≤ 8%
+  # Downgrade triggers:
+  #   5+ consecutive losses  OR  drawdown ≥ 8%
+
 logging:
   level: "DEBUG"
   file: "logs/trading.log"
