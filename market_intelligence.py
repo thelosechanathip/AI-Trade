@@ -100,6 +100,16 @@ class MarketNarrative:
     narrative:      str        = ''
     signals_active: List[str]  = field(default_factory=list)
 
+    @property
+    def bos_choch(self) -> dict:
+        """Dict view consumed by ExitIntelligence and MarketBrain."""
+        return {
+            'bos_bull':   self.bos_bull,
+            'bos_bear':   self.bos_bear,
+            'choch_bull': self.choch_bull,
+            'choch_bear': self.choch_bear,
+        }
+
     def to_dict(self) -> dict:
         return {
             'regime':            self.regime,

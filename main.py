@@ -37,11 +37,14 @@ from utils import (
     write_state, get_trade_stats, log_activity,
     get_open_trades_from_db,
 )
-from strategy      import generate_signal, detect_regime
-from risk          import RiskManager
-from execution_mt5 import MT5Executor
-from ai_model      import AIModel
-from trade_manager import TradeManager
+from strategy          import generate_signal, detect_regime
+from risk              import RiskManager
+from execution_mt5     import MT5Executor
+from ai_model          import AIModel
+from trade_manager     import TradeManager
+from market_brain      import MarketBrain, BrainContext, BrainDecision
+from exit_intelligence import ExitIntelligence
+from brain_memory      import BrainMemory
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -60,6 +63,46 @@ def rates_to_df(rates) -> pd.DataFrame:
     return df[['open', 'high', 'low', 'close', 'volume']].copy()
 
 
+# ── Lightweight MI narrative proxy built from terminal dict ──────────────────
+
+class _TerminalNarrative:
+    """
+    Wraps the per-symbol terminal dict so ExitIntelligence can read
+    MI narrative fields without requiring the full MarketNarrative object.
+    """
+    def __init__(self, term: dict):
+        signals = term.get('mi_signals', []) or []
+        self.regime               = term.get('mi_regime',     '')
+        self.narrative            = term.get('mi_narrative',  '')
+        self.signals_active       = signals
+        self.setup_quality        = float(term.get('mi_quality', 0.5))
+        self.block_buy            = bool(term.get('mi_block_buy',  False))
+        self.block_sell           = bool(term.get('mi_block_sell', False))
+        self.block_reason         = ''
+        self.confidence_adjustment= 0.0
+        self.uncertainty          = 0.0
+        # Populate signal flags from active signal list
+        s = set(signals)
+        self.rsi_divergence_bull  = 'RSI_DIV_BULL'  in s
+        self.rsi_divergence_bear  = 'RSI_DIV_BEAR'  in s
+        self.macd_divergence_bull = 'MACD_DIV_BULL' in s
+        self.macd_divergence_bear = 'MACD_DIV_BEAR' in s
+        self.displacement_bull    = 'DISP_BULL'     in s
+        self.displacement_bear    = 'DISP_BEAR'     in s
+        self.liquidity_sweep_bull = 'LIQ_SWEEP_BULL' in s
+        self.liquidity_sweep_bear = 'LIQ_SWEEP_BEAR' in s
+        self.volatility_climax    = 'VOL_CLIMAX'    in s
+        self.reversal_detected    = 'REVERSAL_UP' in s or 'REVERSAL_DOWN' in s
+        self.reversal_direction   = ('UP' if 'REVERSAL_UP' in s
+                                     else ('DOWN' if 'REVERSAL_DOWN' in s else ''))
+        self.bos_choch: dict = {
+            'bos_bull':   'BOS_BULL'   in s,
+            'bos_bear':   'BOS_BEAR'   in s,
+            'choch_bull': 'CHOCH_BULL' in s,
+            'choch_bear': 'CHOCH_BEAR' in s,
+        }
+
+
 # ── Engine ────────────────────────────────────────────────────────────────────
 
 class TradingEngine:
@@ -70,10 +113,13 @@ class TradingEngine:
         self.logger = setup_logging(self.config)
         init_db()
 
-        self.risk         = RiskManager(self.config)
-        self.executor     = MT5Executor(self.config)
-        self.ai           = AIModel(self.config)
+        self.risk          = RiskManager(self.config)
+        self.executor      = MT5Executor(self.config)
+        self.ai            = AIModel(self.config)
         self.trade_manager = TradeManager(self.config)
+        self.brain_memory  = BrainMemory()
+        self.market_brain  = MarketBrain(self.config, self.brain_memory)
+        self.exit_intel    = ExitIntelligence(self.config)
 
         self.running              = False
         self._ai_last_train_ts    = 0.0
@@ -82,6 +128,8 @@ class TradingEngine:
         self._last_trade_ts: dict = {}               # symbol -> timestamp of last trade open
         self._ticket_direction: dict   = {}            # ticket -> 'BUY'|'SELL'
         self._ticket_confidence: dict  = {}            # ticket -> ai_confidence int
+        self._ticket_brain: dict       = {}            # ticket -> BrainDecision
+        self._ticket_entry_bar: dict   = {}            # ticket -> bar count at entry
         # direction_ban: symbol -> {'direction': 'BUY'|'SELL', 'until': float}
         self._direction_ban: dict = {}
         # per-symbol consecutive losses per direction: symbol -> {'BUY': int, 'SELL': int}
@@ -627,8 +675,56 @@ class TradingEngine:
             'ai',
         )
 
+        # ── 8b. Market Brain decision (primary decision maker) ───────────────
+        ctx = BrainContext(
+            df           = df,
+            mi_narrative = mi_narrative,
+            htf_bias     = htf_bias,
+            htf_strength = htf_strength,
+            adx          = float(df.iloc[-1].get('adx', 0.0)) if 'adx' in df.columns else 0.0,
+            rsi          = float(df.iloc[-1]['rsi']) if 'rsi' in df.columns else None,
+            macd_hist    = float(df.iloc[-1].get('macd_hist', 0.0)) if 'macd_hist' in df.columns else None,
+            stoch_k      = float(df.iloc[-1].get('stoch_k', 50.0)) if 'stoch_k' in df.columns else None,
+            regime       = regime,
+            ema_trend    = signal,   # rule-based EMA trend expressed as BUY/SELL/HOLD
+            ai_bias      = ai_bias,
+            ai_confidence= float(ai_confidence),
+            rule_signal  = signal,
+            symbol       = symbol,
+        )
+
+        open_count     = len(existing_sym_pos)
+        brain_decision = self.market_brain.decide(
+            ctx, open_trade_count=open_count,
+            max_trades=cfg['risk']['max_concurrent_trades'],
+        )
+
+        # Log brain decision
+        self.logger.info(
+            f"{symbol}: Brain={brain_decision.decision} "
+            f"conf={brain_decision.confidence:.0%} "
+            f"unc={brain_decision.uncertainty:.0%} "
+            f"quality={brain_decision.entry_quality:.0%} "
+            f"regime={brain_decision.market_regime} "
+            f"rev_prob={brain_decision.reversal_probability:.0%}"
+        )
+        if brain_decision.hold_reasons:
+            self.logger.info(
+                f"{symbol}: Brain HOLD reasons: {brain_decision.hold_reasons}"
+            )
+
+        # Record decision to memory
+        try:
+            self.brain_memory.record_decision(brain_decision, symbol)
+        except Exception:
+            pass
+
+        # Use brain decision as final signal
+        signal = brain_decision.decision
+
         if signal == 'HOLD':
-            log_activity(symbol, "รอจังหวะ — ยังไม่มีสัญญาณ", 'info')
+            hold_summary = '; '.join(brain_decision.hold_reasons[:2]) or 'Brain: no setup'
+            log_activity(symbol, f"HOLD — {hold_summary}", 'info')
             return
 
         # ── Direction ban check ───────────────────────────────────────────────
@@ -641,8 +737,6 @@ class TradingEngine:
             return
 
         # ── Per-direction stacking guard ──────────────────────────────────────
-        # Don't pile into a direction when existing same-direction trades are all losing.
-        # Also enforce a per-direction cap (default 2) separate from total cap.
         _mt5_type = {'BUY': 0, 'SELL': 1}
         same_dir_pos = [
             p for p in existing_sym_pos
@@ -662,24 +756,12 @@ class TradingEngine:
             log_activity(symbol, f"งดเพิ่มไม้ {signal} — ทุกไม้ทิศนี้ขาดทุนอยู่", 'warning')
             return
 
-        log_activity(symbol, f"สัญญาณ {signal} — H4 bias={htf_bias} — รอยืนยัน AI", 'signal')
-
-        if cfg['ai']['enabled'] and self.ai.is_trained:
-            # Block ONLY when AI confidently predicts the OPPOSITE direction.
-            # Neutral AI = let strategy signal through.
-            # Agreeing AI = definitely let through.
-            opposite_bias = 'bearish' if signal == 'BUY' else 'bullish'
-            if ai_bias == opposite_bias and ai_confidence >= cfg['ai']['min_confidence']:
-                self.logger.info(
-                    f"{symbol}: AI filter blocked — AI predicts {ai_bias}({ai_confidence}%) "
-                    f"against signal={signal}"
-                )
-                log_activity(
-                    symbol,
-                    f"AI บล็อก: คาด {ai_bias} {ai_confidence}% สวนทาง {signal}",
-                    'warning',
-                )
-                return
+        log_activity(
+            symbol,
+            f"Brain: {signal} conf={brain_decision.confidence:.0%} "
+            f"quality={brain_decision.entry_quality:.0%} | H4={htf_bias}",
+            'signal',
+        )
 
         # ── 9. SL / TP calculation ────────────────────────────────────────────
         sym_info = self.executor.get_symbol_info(symbol)
@@ -716,7 +798,7 @@ class TradingEngine:
             )
             return
 
-        # ── 10. Position sizing (Kelly + direction penalty scaling) ─────────
+        # ── 10. Position sizing (Kelly + direction + Brain risk scaling) ──────
         stats    = get_trade_stats()
         lot_size = self.risk.calculate_lot_size(
             balance, sl_dist, sym_info,
@@ -732,6 +814,14 @@ class TradingEngine:
                 f"(streak={self._dir_loss_streak.get(symbol, {}).get(signal, 0)})"
             )
             lot_size = round(lot_size * dir_scale, 2)
+        # Apply Brain risk adjustment (uncertainty / reversal probability scaling)
+        brain_risk_adj = brain_decision.risk_multiplier_adj
+        if brain_risk_adj < 1.0:
+            lot_size = round(lot_size * brain_risk_adj, 2)
+            self.logger.info(
+                f"{symbol}: Brain risk adj={brain_risk_adj:.2f} "
+                f"(state={brain_decision.risk_state})"
+            )
 
         # ── 11. Execute ───────────────────────────────────────────────────────
         result = self.executor.place_market_order(
@@ -753,10 +843,19 @@ class TradingEngine:
                 'order',
             )
             self._known_tickets.add(result['ticket'])
-            self._ticket_direction[result['ticket']]  = signal          # track for direction ban
-            self._ticket_confidence[result['ticket']] = ai_confidence   # track for dashboard
+            self._ticket_direction[result['ticket']]  = signal
+            self._ticket_confidence[result['ticket']] = ai_confidence
+            self._ticket_brain[result['ticket']]      = brain_decision
+            self._ticket_entry_bar[result['ticket']]  = len(df)
             # Store entry features for trade-outcome feedback learning
             self.ai.record_trade_entry(result['ticket'], df, signal)
+            # Record to Brain memory
+            try:
+                self.brain_memory.record_trade_open(
+                    result['ticket'], brain_decision, result['price'], symbol
+                )
+            except Exception:
+                pass
             insert_trade({
                 'ticket':       result['ticket'],
                 'symbol':       symbol,
@@ -768,6 +867,78 @@ class TradingEngine:
                 'open_time':    datetime.now().isoformat(timespec='seconds'),
                 'ai_confidence': ai_confidence,
             })
+
+    # ── Exit Intelligence: re-evaluate all open positions ────────────────────
+
+    def _re_evaluate_positions(self) -> None:
+        """
+        Called every cycle.  For each open position, ask ExitIntelligence
+        whether the narrative has shifted enough to warrant early exit.
+        Executes closes/reductions via executor.
+        """
+        magic      = self.config['trading']['magic_number']
+        all_open   = self.executor.get_all_open_positions()
+        if not all_open:
+            return
+
+        for pos in all_open:
+            if pos.magic != magic:
+                continue
+
+            ticket    = pos.ticket
+            direction = 'BUY' if pos.type == 0 else 'SELL'
+            symbol    = pos.symbol
+
+            # Need the latest MI narrative for this symbol
+            term       = self._terminal.get(symbol, {})
+            # Reconstruct a minimal mi_narrative proxy from terminal data
+            # (the full object is not stored; use a lightweight holder)
+            mi_narr = _TerminalNarrative(term)
+
+            bd        = self._ticket_brain.get(ticket)
+            atr       = float(term.get('atr', 0.0))
+            close     = float(term.get('price', pos.price_current))
+            sl_dist   = abs(close - pos.sl) if pos.sl else atr * 1.5
+            profit_r  = (pos.profit / (sl_dist * pos.volume * 100)) if sl_dist > 0 else 0.0
+
+            exit_sig = self.exit_intel.evaluate(
+                ticket        = ticket,
+                direction     = direction,
+                entry_price   = pos.price_open,
+                current_price = close,
+                sl_price      = pos.sl,
+                tp_price      = pos.tp,
+                atr           = atr,
+                mi_narrative  = mi_narr,
+                brain_decision= bd,
+                bars_held     = 0,
+                profit_r      = profit_r,
+            )
+
+            if not exit_sig.should_act:
+                continue
+
+            self.logger.info(
+                f"ExitIntelligence #{ticket} {direction}: "
+                f"{exit_sig.action} — {exit_sig.reason}"
+            )
+            log_activity(
+                symbol,
+                f"ExitAI #{ticket}: {exit_sig.action} — {exit_sig.reason}",
+                'warning',
+            )
+
+            if exit_sig.action == 'CLOSE':
+                self.executor.close_by_ticket(ticket)
+
+            elif exit_sig.action in ('REDUCE_50', 'REDUCE_30'):
+                pct    = 0.50 if exit_sig.action == 'REDUCE_50' else 0.30
+                volume = round(pos.volume * pct, 2)
+                if volume >= 0.01:
+                    self.executor.partial_close(ticket, volume)
+
+            elif exit_sig.action == 'TIGHTEN_SL' and exit_sig.new_sl > 0:
+                self.executor.modify_sl(ticket, exit_sig.new_sl)
 
     # ── Closed-position sync ──────────────────────────────────────────────────
 
@@ -794,10 +965,32 @@ class TradingEngine:
                 if direction and d.symbol:
                     self._update_direction_streak(d.symbol, direction, d.profit)
                 elif direction:
-                    # Fallback: apply to all tracked symbols (single-symbol setup)
                     for sym in self.config['trading']['symbols']:
                         self._update_direction_streak(sym, direction, d.profit)
+                # Brain memory: record close + self-review
+                try:
+                    outcome = 'win' if d.profit > 0 else ('breakeven' if d.profit == 0 else 'loss')
+                    entry_bar = self._ticket_entry_bar.pop(d.order, 0)
+                    bars_held = 0  # approximate
+                    self.brain_memory.record_trade_close(
+                        d.order, d.price, d.profit, outcome, bars_held
+                    )
+                    bd = self._ticket_brain.get(d.order)
+                    if bd:
+                        self.brain_memory.update_learning_feedback(
+                            bd.market_regime, outcome, d.profit,
+                            bd.confidence, bars_held
+                        )
+                        if outcome == 'loss':
+                            self.brain_memory.record_failure_pattern(
+                                d.symbol or '', direction, bd.market_regime,
+                                bd.signals_active, d.profit, bars_held
+                            )
+                    self.brain_memory.self_review(d.order)
+                except Exception as exc:
+                    self.logger.debug(f"Brain memory post-trade update failed: {exc}")
                 self._ticket_confidence.pop(d.order, None)
+                self._ticket_brain.pop(d.order, None)
                 self._known_tickets.discard(d.order)
 
     # ── Dashboard state update ────────────────────────────────────────────────
@@ -870,6 +1063,18 @@ class TradingEngine:
                 'tp_price':      p.tp,
                 'profit':        round(p.profit, 2),
                 'ai_confidence': self._ticket_confidence.get(p.ticket, 0),
+                'brain_decision': (
+                    self._ticket_brain[p.ticket].decision
+                    if p.ticket in self._ticket_brain else ''
+                ),
+                'brain_confidence': (
+                    round(self._ticket_brain[p.ticket].confidence, 3)
+                    if p.ticket in self._ticket_brain else 0.0
+                ),
+                'brain_regime': (
+                    self._ticket_brain[p.ticket].market_regime
+                    if p.ticket in self._ticket_brain else ''
+                ),
             })
 
         # Build symbols dict for dashboard (indicator values)
@@ -886,9 +1091,15 @@ class TradingEngine:
                 'stoch_k':      term.get('stoch_k',   0),
                 'ai_bias':      term.get('ai_bias', 'neutral'),
                 'ai_confidence': term.get('ai_confidence', 0),
-                'regime':       term.get('regime', 'TREND'),
-                'signal':       term.get('signal', 'HOLD'),
-                'atr':          term.get('atr', 0),
+                'regime':          term.get('regime', 'TREND'),
+                'signal':          term.get('signal', 'HOLD'),
+                'atr':             term.get('atr', 0),
+                'mi_regime':       term.get('mi_regime', ''),
+                'mi_narrative':    term.get('mi_narrative', ''),
+                'mi_signals':      term.get('mi_signals', []),
+                'mi_quality':      term.get('mi_quality', 0.0),
+                'mi_block_buy':    term.get('mi_block_buy', False),
+                'mi_block_sell':   term.get('mi_block_sell', False),
             }
 
         stats = get_trade_stats()
@@ -968,6 +1179,9 @@ class TradingEngine:
                 # Active trade management (break-even / trailing / partial close)
                 all_open = self.executor.get_all_open_positions()
                 self.trade_manager.manage(all_open)
+
+                # Exit Intelligence: narrative-driven early exits
+                self._re_evaluate_positions()
 
                 # Housekeeping
                 self._sync_closed_positions()

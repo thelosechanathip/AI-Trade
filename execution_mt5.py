@@ -348,6 +348,83 @@ class MT5Executor:
         )
         return False
 
+    def close_by_ticket(self, ticket: int) -> bool:
+        """Close a position identified by ticket number only."""
+        pos_list = mt5.positions_get(ticket=ticket)
+        if not pos_list:
+            logger.warning(f"close_by_ticket: ticket {ticket} not found")
+            return False
+        return self.close_position(pos_list[0])
+
+    def partial_close(self, ticket: int, volume: float) -> bool:
+        """Partially close `volume` lots of an open position."""
+        pos_list = mt5.positions_get(ticket=ticket)
+        if not pos_list:
+            logger.warning(f"partial_close: ticket {ticket} not found")
+            return False
+        pos     = pos_list[0]
+        is_long = pos.type == mt5.ORDER_TYPE_BUY
+        tick    = mt5.symbol_info_tick(pos.symbol)
+        if tick is None:
+            logger.error(f"No tick for {pos.symbol}")
+            return False
+
+        vol = min(round(volume, 2), round(pos.volume, 2))
+        if vol <= 0:
+            return False
+
+        result = mt5.order_send({
+            'action':       mt5.TRADE_ACTION_DEAL,
+            'symbol':       pos.symbol,
+            'volume':       vol,
+            'type':         mt5.ORDER_TYPE_SELL if is_long else mt5.ORDER_TYPE_BUY,
+            'position':     ticket,
+            'price':        tick.bid if is_long else tick.ask,
+            'deviation':    self._exec_cfg['deviation'],
+            'magic':        pos.magic,
+            'comment':      'partial_close',
+            'type_time':    mt5.ORDER_TIME_GTC,
+            'type_filling': self._resolve_filling(pos.symbol),
+        })
+
+        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+            logger.info(
+                f"PARTIAL CLOSE ticket={ticket} vol={vol:.2f} @ {result.price:.5f}"
+            )
+            return True
+
+        logger.error(
+            f"partial_close failed ticket={ticket}: "
+            f"{mt5.last_error() if result is None else result.comment}"
+        )
+        return False
+
+    def modify_sl(self, ticket: int, new_sl: float) -> bool:
+        """Move stop-loss for an open position."""
+        pos_list = mt5.positions_get(ticket=ticket)
+        if not pos_list:
+            logger.warning(f"modify_sl: ticket {ticket} not found")
+            return False
+        pos = pos_list[0]
+
+        result = mt5.order_send({
+            'action':   mt5.TRADE_ACTION_SLTP,
+            'position': ticket,
+            'symbol':   pos.symbol,
+            'sl':       round(new_sl, 5),
+            'tp':       pos.tp,
+        })
+
+        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+            logger.info(f"SL modified ticket={ticket} → {new_sl:.5f}")
+            return True
+
+        logger.error(
+            f"modify_sl failed ticket={ticket}: "
+            f"{mt5.last_error() if result is None else result.comment}"
+        )
+        return False
+
     # ── Deal history ──────────────────────────────────────────────────────────
 
     def get_closed_deals(self, from_ts: float, to_ts: float, magic: int) -> List:
