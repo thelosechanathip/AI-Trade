@@ -5,7 +5,7 @@
 ระบบเทรด XAUUSD (ทองคำ) อัตโนมัติ 100% บน MetaTrader 5
 ขับเคลื่อนด้วย AI และ Machine Learning แบบ Local ไม่พึ่งพา Cloud
 
-Engine Version: `v3.0` (Progressive Autonomous AI Trader)
+Engine Version: `v3.1` (Stable Autonomous AI Trader)
 
 ---
 
@@ -41,11 +41,15 @@ AI-Trade เป็นระบบ Algorithmic Trading สำหรับ MetaTra
 | `ai_model.py` | ML ensemble (RF+XGB+LGBM+LSTM+RL+Online SGD) |
 | `rl_agent.py` | Double DQN reinforcement learning agent |
 | `execution_mt5.py` | All MT5 API interactions |
+| `signal_stability.py` | Signal persistence filter — requires N consecutive same-signal cycles |
+| `noise_filter.py` | Market noise filter — doji, micro candle, parabolic, spread cost |
+| `anti_chase.py` | Anti-chase engine — blocks overextension, RSI extreme, momentum stretch |
+| `context_persistence.py` | Slow-decaying directional bias — prevents rapid bias flips |
 | `config.yaml` | Master configuration (UTF-8 required) |
 
 ---
 
-## Signal Pipeline (v3.0)
+## Signal Pipeline (v3.1)
 
 New architecture separates the **Rule Engine** (always active) from the **AI Brain** (context modifier):
 
@@ -56,9 +60,21 @@ Strategy Engine (Rule-Based — always primary)
     ↓
 Market Intelligence (Regime + Divergence + BOS/CHOCH)
     ↓
+Signal Stability (record signal; 2+ consecutive cycles required)
+    ↓
 AI Context Layer (Brain analyzes, doesn't block at L0-2)
     ↓
 Progressive Autonomy Gate (Final Trade Score)
+    ↓
+Context Persistence (bias stability bonus/penalty)
+    ↓
+Signal Stability Gate (check N consecutive same-signal)
+    ↓
+Noise Filter (doji / micro candle / parabolic rejection)
+    ↓
+Anti-Chase Engine (overextension / RSI extreme / momentum stretch)
+    ↓
+Setup Grade (A+/A/B/C) + Lot Scale
     ↓
 Risk Intelligence (Kelly + drawdown + cold-start scaling)
     ↓
@@ -278,3 +294,54 @@ Block conditions (in strategy.py):
 | H1 | EMA50 | Intraday bridge |
 
 Returns `(bias: str, strength: float)` — NEUTRAL if H4 in neutral zone or H4+D1 conflict.
+
+---
+
+## AI Stability Layer (v3.1)
+
+Four modules filter entries after the Final Trade Score gate:
+
+### Signal Stability (`signal_stability.py`)
+
+`SignalStabilityTracker` requires **2 consecutive cycles** of the same direction before entry:
+- `record(symbol, signal)` — called every cycle, including HOLDs
+- `check(symbol, signal)` — returns `StabilityResult.is_stable`
+- HOLD always passes (not an entry signal)
+- Signal tracker resets after each trade open
+
+### Noise Filter (`noise_filter.py`)
+
+`NoiseFilter.assess(df, signal, spread_pts)` returns `NoiseAssessment`:
+- **Doji score**: body/range < 18% = 1.0, < 30% = 0.6
+- **Micro candle**: body < 0.15×ATR = 1.0, < 0.25×ATR = 0.5
+- **Parabolic**: 3+ consecutive large (>1×ATR) same-direction candles = 0.75+
+- **Spread**: spread/ATR > 20% = penalty
+- Composite weighted score >= 0.60 = blocked
+
+### Anti-Chase Engine (`anti_chase.py`)
+
+`AntiChaseEngine.assess(df, signal)` returns `ChaseAssessment`:
+- **Overextension**: price > 3×ATR from EMA200 → score up to 1.0
+- **RSI extreme**: BUY with RSI > 75 or SELL with RSI < 25 → penalty
+- **Momentum stretch**: 3+ consecutive large same-direction candles ≥ 1.5×ATR → 0.9
+- **Volatility climax**: current ATR > mean + 2.5×std → penalty
+- Composite weighted score >= 0.60 = blocked
+
+### Context Persistence (`context_persistence.py`)
+
+`ContextPersistenceEngine.update(symbol, raw_signal, ...)` returns `PersistenceResult`:
+- Maintains slow EMA (alpha=0.20) of directional evidence per symbol
+- Bias flip requires: `cycles_held >= 3` AND `flip_score >= 0.72`
+- Signal must match stable bias OR be HOLD, else entry is blocked
+- **Stability bonus**: long-held bias +0.05 to final_score, fresh flip -0.03
+
+### Setup Grading
+
+After all stability checks pass, the adjusted_score determines lot scale:
+
+| Grade | Adjusted Score | Lot Scale |
+|---|---|---|
+| A+ | ≥ 0.70 | 100% |
+| A  | 0.58–0.70 | 80% |
+| B  | 0.45–0.58 | 55% |
+| C  | < 0.45 | HOLD |

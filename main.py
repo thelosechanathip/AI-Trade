@@ -42,11 +42,15 @@ from risk              import RiskManager
 from execution_mt5     import MT5Executor
 from ai_model          import AIModel
 from trade_manager     import TradeManager
-from market_brain        import MarketBrain, BrainContext, BrainDecision
-from exit_intelligence   import ExitIntelligence
-from brain_memory        import BrainMemory
+from market_brain         import MarketBrain, BrainContext, BrainDecision
+from exit_intelligence    import ExitIntelligence
+from brain_memory         import BrainMemory
 from confidence_bootstrap import ConfidenceBootstrap
-from cold_start_manager  import ColdStartManager
+from cold_start_manager   import ColdStartManager
+from signal_stability     import SignalStabilityTracker
+from noise_filter         import NoiseFilter
+from anti_chase           import AntiChaseEngine
+from context_persistence  import ContextPersistenceEngine
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -119,11 +123,18 @@ class TradingEngine:
         self.executor      = MT5Executor(self.config)
         self.ai            = AIModel(self.config)
         self.trade_manager = TradeManager(self.config)
-        self.brain_memory        = BrainMemory()
-        self.market_brain        = MarketBrain(self.config, self.brain_memory)
-        self.exit_intel          = ExitIntelligence(self.config)
+        self.brain_memory         = BrainMemory()
+        self.market_brain         = MarketBrain(self.config, self.brain_memory)
+        self.exit_intel           = ExitIntelligence(self.config)
         self.confidence_bootstrap = ConfidenceBootstrap()
-        self.cold_start_manager  = ColdStartManager(self.config)
+        self.cold_start_manager   = ColdStartManager(self.config)
+        # Stability layer
+        self.signal_stability     = SignalStabilityTracker(required_cycles=2, window_size=5)
+        self.noise_filter         = NoiseFilter(threshold=0.60)
+        self.anti_chase           = AntiChaseEngine(chase_threshold=0.60)
+        self.context_persistence  = ContextPersistenceEngine(
+            ema_alpha=0.20, flip_threshold=0.72, min_cycles_before_flip=3
+        )
 
         self.running              = False
         self._ai_last_train_ts    = 0.0
@@ -679,6 +690,10 @@ class TradingEngine:
             'ai',
         )
 
+        # ── 7b. Signal Stability: record current signal each cycle ───────────
+        # Record BEFORE Brain so even HOLD cycles count toward stability tracking.
+        self.signal_stability.record(symbol, signal)
+
         # ── 8b. Market Brain — Context Analysis ──────────────────────────────
         # Architecture: Rule Engine = Primary Decision Layer
         #               Brain      = Context Modifier + Risk Intelligence
@@ -790,12 +805,106 @@ class TradingEngine:
             )
             return
 
-        # Confidence scale for lot sizing (quality → size reduction)
-        if   final_score >= 0.65: conf_scale = 1.00
-        elif final_score >= 0.55: conf_scale = 0.85
-        elif final_score >= 0.45: conf_scale = 0.70
-        elif final_score >= 0.35: conf_scale = 0.55
-        else:                     conf_scale = 0.45
+        # ── Context Persistence: update stable bias + stability bonus ─────────
+        persistence = self.context_persistence.update(
+            symbol        = symbol,
+            raw_signal    = signal,
+            htf_bias      = htf_bias,
+            htf_strength  = htf_strength,
+            ai_confidence = brain_decision.confidence,
+            final_score   = final_score,
+        )
+        # Apply stability bonus/penalty to final_score
+        adjusted_score = max(0.0, min(1.0, final_score + persistence.stability_bonus))
+
+        if not persistence.signal_matches and persistence.cycles_held >= 3:
+            log_activity(
+                symbol,
+                f"Bias mismatch: signal={signal} but stable bias={persistence.stable_bias} "
+                f"({persistence.cycles_held} cycles) — skipping",
+                'info',
+            )
+            return
+
+        self.logger.debug(
+            f"{symbol}: persistence bias={persistence.stable_bias} "
+            f"held={persistence.cycles_held} bonus={persistence.stability_bonus:+.3f} "
+            f"flipped={persistence.just_flipped}"
+        )
+
+        # ── Signal Stability gate: require N consecutive same-direction cycles ─
+        stability = self.signal_stability.check(symbol, signal)
+        if not stability.is_stable:
+            log_activity(
+                symbol,
+                f"Signal not stable yet: {signal} seen {stability.count}/{stability.required} cycles "
+                f"(flips={stability.flip_count})",
+                'info',
+            )
+            return
+
+        self.logger.debug(
+            f"{symbol}: signal stability OK — {signal} {stability.count}/{stability.required} cycles"
+        )
+
+        # ── Noise Filter: reject low-quality price action ──────────────────────
+        spread_pts = 0.0
+        tick_ns = self.executor.get_tick(symbol)
+        if tick_ns:
+            spread_pts = float(tick_ns.ask) - float(tick_ns.bid)
+
+        noise = self.noise_filter.assess(df, signal, spread_pts=spread_pts)
+        if noise.is_noisy:
+            log_activity(
+                symbol,
+                f"Noise filter blocked: score={noise.noise_score:.0%} — "
+                + "; ".join(noise.reasons[:2]),
+                'info',
+            )
+            return
+
+        if noise.noise_score > 0.30:
+            self.logger.debug(
+                f"{symbol}: noise={noise.noise_score:.0%} (below threshold) "
+                f"reasons={noise.reasons}"
+            )
+
+        # ── Anti-Chase gate: block chasing exhausted moves ─────────────────────
+        chase = self.anti_chase.assess(df, signal)
+        if chase.is_chasing:
+            log_activity(
+                symbol,
+                f"Anti-chase blocked: score={chase.chase_score:.0%} — "
+                + "; ".join(chase.reasons[:2]),
+                'warning',
+            )
+            return
+
+        if chase.chase_score > 0.30:
+            self.logger.debug(
+                f"{symbol}: chase={chase.chase_score:.0%} reasons={chase.reasons}"
+            )
+
+        # ── Setup grade from adjusted_score ──────────────────────────────────
+        # A+ = full size, A = 0.80×, B = 0.55×, C = HOLD
+        if   adjusted_score >= 0.70: grade, grade_scale = 'A+', 1.00
+        elif adjusted_score >= 0.58: grade, grade_scale = 'A',  0.80
+        elif adjusted_score >= 0.45: grade, grade_scale = 'B',  0.55
+        else:
+            log_activity(symbol, f"Grade C setup ({adjusted_score:.0%}) — skip", 'info')
+            return
+
+        self.logger.info(
+            f"{symbol}: grade={grade} (adjusted_score={adjusted_score:.0%} "
+            f"scale={grade_scale:.0%})"
+        )
+
+        # Confidence scale for lot sizing uses adjusted_score
+        if   adjusted_score >= 0.65: conf_scale = 1.00
+        elif adjusted_score >= 0.55: conf_scale = 0.85
+        elif adjusted_score >= 0.45: conf_scale = 0.70
+        elif adjusted_score >= 0.35: conf_scale = 0.55
+        else:                        conf_scale = 0.45
 
         # ── Direction ban check ───────────────────────────────────────────────
         if self._is_direction_banned(symbol, signal):
@@ -893,13 +1002,13 @@ class TradingEngine:
                 f"{symbol}: Brain risk adj={brain_risk_adj:.2f} "
                 f"(state={brain_decision.risk_state})"
             )
-        # Cold-start + confidence quality scales
+        # Cold-start + confidence + grade quality scales
         cold_scale = self.cold_start_manager.get_risk_scale()
-        lot_size   = round(lot_size * cold_scale * conf_scale, 2)
-        if cold_scale < 1.0 or conf_scale < 1.0:
+        lot_size   = round(lot_size * cold_scale * conf_scale * grade_scale, 2)
+        if cold_scale < 1.0 or conf_scale < 1.0 or grade_scale < 1.0:
             self.logger.info(
                 f"{symbol}: lot scaled cold={cold_scale:.2f} "
-                f"conf={conf_scale:.2f} → {lot_size:.2f}"
+                f"conf={conf_scale:.2f} grade={grade_scale:.2f} → {lot_size:.2f}"
             )
 
         # ── 11. Execute ───────────────────────────────────────────────────────
@@ -915,6 +1024,8 @@ class TradingEngine:
 
         if result:
             self._last_trade_ts[symbol] = time.time()   # start cooldown
+            # Reset stability tracker: the signal was consumed — next entry needs fresh confirmation
+            self.signal_stability.reset(symbol)
             log_activity(
                 symbol,
                 f"ส่งคำสั่ง {signal} @ {result['price']:.5f} | Lot={lot_size:.2f} | "

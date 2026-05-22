@@ -1,4 +1,4 @@
-# AI-Trade v3.0 — Autonomous XAUUSD Trading System
+# AI-Trade v3.1 — Stable Autonomous XAUUSD Trading System
 
 Fully automated gold (XAUUSD) trading on MetaTrader 5, powered by local AI/ML with no cloud dependency.
 
@@ -240,6 +240,62 @@ strategy:
 
 ---
 
+## Context Stability Engine (v3.1)
+
+Four layers prevent "jittery" AI behavior — single-candle reactions, chasing exhausted moves, and rapid bias flips:
+
+### Signal Persistence
+
+Requires **2 consecutive cycles** of the same direction before entry is allowed. A single BUY signal followed by SELL resets the counter. Eliminates one-bar wonder trades.
+
+### Noise Filter
+
+Blocks entries on low-quality candles:
+
+| Check | Trigger | Score |
+|---|---|---|
+| Doji | body/range < 18% | 1.0 |
+| Weak body | body/range < 30% | 0.6 |
+| Micro candle | body < 0.15×ATR | 1.0 |
+| Parabolic | 4+ large same-dir candles | 1.0 |
+| High spread | spread > 20% of ATR | proportional |
+
+Composite score ≥ 0.60 → entry blocked.
+
+### Anti-Chase Engine
+
+Detects exhausted moves before entry:
+
+| Check | Trigger | Weight |
+|---|---|---|
+| Overextension | price > 3×ATR from EMA200 | 35% |
+| RSI extreme | BUY with RSI > 75 / SELL with RSI < 25 | 25% |
+| Momentum stretch | 3+ large candles ≥ 1.5×ATR same direction | 25% |
+| Vol climax | ATR > mean + 2.5×std | 15% |
+
+Score ≥ 0.60 → entry blocked.
+
+### Bias Stability (Context Persistence)
+
+Maintains a slow-decaying directional bias per symbol:
+- EMA alpha = 0.20 (very slow adaptation)
+- Bias flip requires: held ≥ 3 cycles **AND** evidence score ≥ 0.72
+- Signal opposing stable bias → entry skipped (bias not yet confirmed)
+- Long-held aligned bias: up to +0.05 bonus to final_score
+
+### Setup Grading
+
+All checks passed → setup graded by adjusted_score:
+
+| Grade | Score | Lot Scale |
+|---|---|---|
+| A+ | ≥ 70% | 100% |
+| A  | 58–70% | 80% |
+| B  | 45–58% | 55% |
+| C  | < 45% | skip |
+
+---
+
 ## File Structure
 
 ```
@@ -250,6 +306,10 @@ AI-Trade/
 |-- market_brain.py            # Multi-agent decision engine
 |-- confidence_bootstrap.py    # Synthetic confidence (cold-start)
 |-- cold_start_manager.py      # Progressive autonomy levels
+|-- signal_stability.py        # Signal persistence filter (2+ cycles)
+|-- noise_filter.py            # Noise rejection (doji/micro/parabolic)
+|-- anti_chase.py              # Anti-chase engine (overextension guard)
+|-- context_persistence.py     # Slow-decaying directional bias
 |-- exit_intelligence.py       # Proactive exit system
 |-- brain_memory.py            # SQLite long-term memory
 |-- uncertainty_engine.py      # 5-component uncertainty scorer
