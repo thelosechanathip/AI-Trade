@@ -8,23 +8,25 @@ trading:
   magic_number: 20240101
 
 risk:
-  risk_per_trade: 0.008
+  risk_per_trade: 0.003
   max_concurrent_trades: 3   # รวมทุกทิศทาง
   max_per_direction: 2       # สูงสุด 2 ไม้ต่อทิศ (BUY หรือ SELL)
+  max_concurrent_trades: 1
+  max_per_direction: 1
   max_daily_loss: 0.04
-  max_drawdown: 0.10
+  max_drawdown: 0.08
   min_rr_ratio: 1.8
   atr_sl_multiplier: 1.8
   atr_tp_multiplier: 3.6
-  use_kelly: true
-  kelly_max_fraction: 0.020
-  dd_scale_start: 0.04
-  dd_scale_min: 0.35
+  use_kelly: false
+  kelly_max_fraction: 0.005
+  dd_scale_start: 0.02
+  dd_scale_min: 0.20
   max_loss_streak: 3
-  loss_streak_scale: 0.50
-  mode: "normal"
+  loss_streak_scale: 0.35
+  mode: "safe"
   safe_risk_multiplier: 0.50
-  aggressive_risk_multiplier: 1.25
+  aggressive_risk_multiplier: 1.00
   adaptive_cooldown:
     enabled: true
     hours_map:                 # streak -> hours of global pause
@@ -68,6 +70,7 @@ strategy:
 sessions:
   enabled: false             # false = เทรด 24 ชั่วโมงตั้งแต่เปิด Program
                               # true  = เฉพาะ London+NY เท่านั้น
+  enabled: true
   london:
     start: "07:00"
     end:   "16:00"
@@ -78,6 +81,7 @@ sessions:
 ai:
   enabled: true
   min_confidence: 55        # ใช้เป็น threshold ที่ AI คัดค้าน direction อย่างมั่นใจ
+  min_confidence: 68
   model_type: "ensemble"
   retrain_interval: 360
   forward_bars: 12
@@ -110,8 +114,9 @@ trade_management:
   news_filter_enabled: true  # หยุดเทรด 30 นาทีก่อน / 15 นาทีหลัง ข่าว High Impact
   news_blackout_before: 30   # นาที ก่อนข่าว
   news_blackout_after:  15   # นาที หลังข่าว
+  cooldown_minutes: 90
   min_sl_points:    12.0
-  max_spread_gold:  15.0
+  max_spread_gold:  10.0
   max_spread_forex:  6.0
 
 execution:
@@ -177,6 +182,8 @@ progressive_autonomy:
   #   L3→L4: 150 trades, AUC ≥ 0.55, winrate ≥ 50%, DD ≤ 8%
   # Downgrade triggers:
   #   5+ consecutive losses  OR  drawdown ≥ 8%
+
+  max_level: 2
 
 logging:
   level: "DEBUG"
