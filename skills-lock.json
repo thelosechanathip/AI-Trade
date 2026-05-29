@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "grill-with-docs": {
+      "source": "akillness/oh-my-skills",
+      "sourceType": "github",
+      "skillPath": ".agent-skills/grill-with-docs/SKILL.md",
+      "computedHash": "eca61486394cb2a713ec113953edb4d6d69a1cfe38d66ce2541edfd8e816f742"
+    }
+  }
+}

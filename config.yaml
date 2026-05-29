@@ -14,6 +14,7 @@ risk:
   max_concurrent_trades: 1
   max_per_direction: 1
   max_daily_loss: 0.04
+  max_weekly_loss: 0.10
   max_drawdown: 0.08
   min_rr_ratio: 1.8
   atr_sl_multiplier: 1.8
@@ -184,6 +185,13 @@ progressive_autonomy:
   #   5+ consecutive losses  OR  drawdown ≥ 8%
 
   max_level: 2
+
+learning_analytics:
+  enabled: true
+  min_trades: 8           # minimum closed trades per context before applying penalty
+  block_win_rate: 0.20    # block trade if context win_rate < 20%
+  penalty_win_rate: 0.38  # apply score penalty if win_rate < 38%
+  lookback_days: 60       # how far back to query historical trades
 
 logging:
   level: "DEBUG"

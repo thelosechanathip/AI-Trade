@@ -35,7 +35,7 @@ from utils import (
     setup_logging, compute_indicators, init_db,
     insert_trade, close_trade_db, record_equity,
     write_state, get_trade_stats, log_activity,
-    get_open_trades_from_db,
+    get_open_trades_from_db, compute_context_penalty,
 )
 from strategy          import generate_signal, detect_regime
 from risk              import RiskManager
@@ -51,6 +51,7 @@ from signal_stability     import SignalStabilityTracker
 from noise_filter         import NoiseFilter
 from anti_chase           import AntiChaseEngine
 from context_persistence  import ContextPersistenceEngine
+from strategy_versioning  import StrategyVersionManager
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -149,6 +150,18 @@ class TradingEngine:
         self._direction_ban: dict = {}
         # per-symbol consecutive losses per direction: symbol -> {'BUY': int, 'SELL': int}
         self._dir_loss_streak: dict = {}
+        # symbol -> timestamp of last loss (any direction) — recent-loss penalty
+        self._last_loss_ts: dict = {}
+        # symbol -> {'direction': 'BUY'|'SELL', 'until': float} — 30min cooldown for
+        # the OPPOSITE direction after a loss (prevents immediate flip trading)
+        self._opposite_cooldown: dict = {}
+
+        # Strategy version manager — seeds v1 from config on first run
+        self.version_manager = StrategyVersionManager(self.config)
+        self.logger.info(
+            f"StrategyVersioning: current version = "
+            f"v{self.version_manager.get_current_version().get('version_id', '?')}"
+        )
 
         self._restore_open_trades()
 
@@ -540,6 +553,53 @@ class TradingEngine:
                     f"{symbol}: {direction} direction ban lifted after a winning trade"
                 )
 
+    # ── Session classifier ────────────────────────────────────────────────────
+
+    def _get_current_session(self) -> str:
+        """Return a session label for the current UTC time."""
+        sess = self.config.get('sessions', {})
+        now  = datetime.utcnow().strftime('%H:%M')
+
+        def in_range(start: str, end: str, t: str) -> bool:
+            return start <= t < end
+
+        london_start = sess.get('london', {}).get('start', '07:00')
+        london_end   = sess.get('london', {}).get('end',   '16:00')
+        ny_start     = sess.get('new_york', {}).get('start', '12:00')
+        ny_end       = sess.get('new_york', {}).get('end',   '21:00')
+
+        in_london = in_range(london_start, london_end, now)
+        in_ny     = in_range(ny_start,     ny_end,     now)
+
+        if in_london and in_ny:
+            return 'LONDON_NY'
+        if in_london:
+            return 'LONDON'
+        if in_ny:
+            return 'NEW_YORK'
+        if '00:00' <= now < '04:00':
+            return 'SYDNEY'
+        if '02:00' <= now < '09:00':
+            return 'TOKYO'
+        return 'OFF_HOURS'
+
+    def _is_opposite_dir_cooled(self, symbol: str, direction: str) -> bool:
+        """Return True if the OPPOSITE-direction cooldown is still active."""
+        entry = self._opposite_cooldown.get(symbol)
+        if not entry:
+            return False
+        if entry['direction'] != direction:
+            return False
+        if time.time() > entry['until']:
+            del self._opposite_cooldown[symbol]
+            return False
+        remaining_min = (entry['until'] - time.time()) / 60
+        self.logger.info(
+            f"{symbol}: opposite-direction cooldown for {direction} — "
+            f"{remaining_min:.0f} min remaining after last loss"
+        )
+        return True
+
     # ── Per-symbol logic ──────────────────────────────────────────────────────
 
     def _process_symbol(self, symbol: str, balance: float) -> None:
@@ -588,6 +648,9 @@ class TradingEngine:
 
         # ── 4. Per-symbol risk checks ─────────────────────────────────────────
         if not self.risk.check_daily_loss_limit(balance):
+            return
+        if not self.risk.check_weekly_loss_limit(balance):
+            log_activity(symbol, "Weekly loss limit reached — หยุดเทรดสัปดาห์นี้", 'warning')
             return
         if not self.risk.check_drawdown_limit(balance):
             self.running = False
@@ -790,10 +853,65 @@ class TradingEngine:
         final_score      = setup_quality * 0.60 + effective_ai * 0.40
         min_score        = self.cold_start_manager.get_min_score_threshold()
 
+        # ── Same-direction loss penalty ───────────────────────────────────────
+        # Each loss in the same direction raises the quality bar (0.06 per loss),
+        # making the system more selective before the hard direction ban fires.
+        dir_streak   = self._dir_loss_streak.get(symbol, {}).get(signal, 0)
+        dir_penalty  = dir_streak * 0.06
+        if dir_penalty > 0:
+            self.logger.info(
+                f"{symbol}: same-direction loss penalty -{dir_penalty:.0%} "
+                f"(streak={dir_streak})"
+            )
+            final_score = max(0.0, final_score - dir_penalty)
+
+        # ── Recent loss penalty ───────────────────────────────────────────────
+        # If a loss occurred on this symbol within the last 90 minutes,
+        # apply an extra -0.10 to discourage hot re-entry.
+        recent_loss_window = 90 * 60
+        last_loss = self._last_loss_ts.get(symbol, 0)
+        if time.time() - last_loss < recent_loss_window:
+            elapsed_min = (time.time() - last_loss) / 60
+            self.logger.info(
+                f"{symbol}: recent loss penalty -10% "
+                f"(last loss {elapsed_min:.0f} min ago)"
+            )
+            final_score = max(0.0, final_score - 0.10)
+
+        # ── Context-based learning penalty ───────────────────────────────────
+        # Uses historical closed-trade stats by session/regime/direction.
+        # Only fires when enough data exists (min 8 trades per context).
+        ctx_penalty, ctx_block, ctx_reasons = compute_context_penalty(
+            session     = self._get_current_session(),
+            regime      = regime,
+            direction   = signal,
+            final_score = final_score,
+            lookback_days = cfg.get('learning_analytics', {}).get('lookback_days', 60),
+            min_trades  = cfg.get('learning_analytics', {}).get('min_trades', 8),
+            block_wr    = cfg.get('learning_analytics', {}).get('block_win_rate', 0.20),
+            penalty_wr  = cfg.get('learning_analytics', {}).get('penalty_win_rate', 0.38),
+        )
+        if ctx_reasons:
+            for r in ctx_reasons:
+                self.logger.info(f"{symbol}: context analytics — {r}")
+
+        if ctx_block:
+            log_activity(
+                symbol,
+                f"Context block: สถิติประวัติบ่งชี้ risk สูงใน context นี้ — {ctx_reasons[0]}",
+                'warning',
+            )
+            return
+
+        if ctx_penalty > 0:
+            final_score = max(0.0, final_score - ctx_penalty)
+
         self.logger.info(
             f"{symbol}: final_score={final_score:.0%} "
             f"(setup={setup_quality:.0%} ai_eff={effective_ai:.0%} "
-            f"bootstrap={bootstrap.score:.0f}/100 bw={bw:.0%}) "
+            f"bootstrap={bootstrap.score:.0f}/100 bw={bw:.0%} "
+            f"dir_pen={dir_penalty:.0%} ctx_pen={ctx_penalty:.0%} "
+            f"recent_loss={'yes' if time.time()-last_loss<recent_loss_window else 'no'}) "
             f"min={min_score:.0%}"
         )
 
@@ -911,6 +1029,15 @@ class TradingEngine:
             log_activity(
                 symbol,
                 f"Direction ban: {signal} ถูกแบน — เว้นจากการเทรดทิศนี้",
+                'warning',
+            )
+            return
+
+        # ── Opposite-direction cooldown (30 min after a loss before flipping) ─
+        if self._is_opposite_dir_cooled(symbol, signal):
+            log_activity(
+                symbol,
+                f"Opposite-direction cooldown: รอก่อนเปลี่ยนทิศเป็น {signal}",
                 'warning',
             )
             return
@@ -1046,16 +1173,21 @@ class TradingEngine:
                 )
             except Exception:
                 pass
+            entry_spread = spread_pts / (sym_info.point * 10) if sym_info.point > 0 else 0.0
             insert_trade({
-                'ticket':       result['ticket'],
-                'symbol':       symbol,
-                'direction':    signal,
-                'lot_size':     lot_size,
-                'entry_price':  result['price'],
-                'sl_price':     sl_price,
-                'tp_price':     tp_price,
-                'open_time':    datetime.now().isoformat(timespec='seconds'),
+                'ticket':        result['ticket'],
+                'symbol':        symbol,
+                'direction':     signal,
+                'lot_size':      lot_size,
+                'entry_price':   result['price'],
+                'sl_price':      sl_price,
+                'tp_price':      tp_price,
+                'open_time':     datetime.now().isoformat(timespec='seconds'),
                 'ai_confidence': ai_confidence,
+                'session':       self._get_current_session(),
+                'regime':        regime,
+                'final_score':   round(adjusted_score, 4),
+                'spread_pips':   round(entry_spread, 2),
             })
 
     # ── Progressive autonomy level management ────────────────────────────────
@@ -1064,6 +1196,7 @@ class TradingEngine:
         """
         Called each main-loop cycle to evaluate whether the system is ready
         to upgrade to a higher autonomy level (or should downgrade).
+        Also syncs live performance to the current strategy version.
         """
         try:
             stats = get_trade_stats()
@@ -1075,6 +1208,19 @@ class TradingEngine:
 
             self.cold_start_manager.check_upgrade(total, wr, auc, dd)
             self.cold_start_manager.check_downgrade(loss_streak, dd)
+
+            # Update live metrics for current strategy version (every 10 trades)
+            if total > 0 and total % 10 == 0:
+                current_vid = self.version_manager.get_current_version().get('version_id')
+                if current_vid:
+                    self.version_manager.update_live_metrics(current_vid, {
+                        'total_trades': total,
+                        'win_rate':     round(wr, 4),
+                        'profit_factor':stats.get('profit_factor', 0.0),
+                        'total_profit': stats.get('total_profit',  0.0),
+                        'drawdown_pct': round(dd * 100, 2),
+                        'updated':      datetime.now().isoformat(timespec='seconds'),
+                    })
         except Exception as exc:
             self.logger.debug(f"_check_autonomy_level: {exc}")
 
@@ -1090,6 +1236,39 @@ class TradingEngine:
         all_open   = self.executor.get_all_open_positions()
         if not all_open:
             return
+
+        # ── Spread spike guard: close all positions for any symbol where the
+        # live spread exceeds 15 pips, protecting SL integrity during spikes.
+        _spike_limit = self.config.get('trade_management', {}).get(
+            'max_spread_gold', 10.0
+        ) * 1.5   # 1.5× the entry spread limit = spike threshold
+        _spiked_symbols: set = set()
+        for pos in all_open:
+            if pos.magic != magic:
+                continue
+            sym = pos.symbol
+            if sym in _spiked_symbols:
+                continue
+            tick = self.executor.get_tick(sym)
+            sym_info = self.executor.get_symbol_info(sym)
+            if tick and sym_info and sym_info.point > 0:
+                live_spread = (tick.ask - tick.bid) / sym_info.point / 10
+                if live_spread > _spike_limit:
+                    _spiked_symbols.add(sym)
+                    self.logger.warning(
+                        f"SPREAD SPIKE on {sym}: {live_spread:.1f} pips > "
+                        f"limit {_spike_limit:.1f} — emergency close all {sym} positions"
+                    )
+                    log_activity(
+                        sym,
+                        f"Spread spike {live_spread:.1f} pips — ปิดสถานะทั้งหมดฉุกเฉิน",
+                        'warning',
+                    )
+
+        for sym in _spiked_symbols:
+            for pos in all_open:
+                if pos.symbol == sym and pos.magic == magic:
+                    self.executor.close_by_ticket(pos.ticket)
 
         for pos in all_open:
             if pos.magic != magic:
@@ -1161,22 +1340,44 @@ class TradingEngine:
         deals = self.executor.get_closed_deals(from_ts, now.timestamp(), magic)
         for d in deals:
             if d.order in self._known_tickets:
+                # Deal reason: 3=SL, 4=TP, 0/1=manual or exit-intel
+                _reason_map = {3: 'SL', 4: 'TP', 0: 'MANUAL', 1: 'MANUAL'}
+                close_reason = _reason_map.get(getattr(d, 'reason', -1), 'EXIT_INTEL')
                 close_trade_db(
-                    ticket      = d.order,
-                    close_price = d.price,
-                    close_time  = datetime.fromtimestamp(d.time).isoformat(),
-                    profit      = d.profit,
+                    ticket       = d.order,
+                    close_price  = d.price,
+                    close_time   = datetime.fromtimestamp(d.time).isoformat(),
+                    profit       = d.profit,
+                    close_reason = close_reason,
                 )
                 self.risk.record_trade_result(d.profit)
                 # Feed trade outcome back to AI for self-learning
                 direction = self._ticket_direction.pop(d.order, '')
                 self.ai.label_closed_trade(d.order, d.profit, direction)
                 # Update per-direction loss streak for direction ban
-                if direction and d.symbol:
-                    self._update_direction_streak(d.symbol, direction, d.profit)
+                sym_for_ban = d.symbol or ''
+                if direction and sym_for_ban:
+                    self._update_direction_streak(sym_for_ban, direction, d.profit)
                 elif direction:
+                    sym_for_ban = self.config['trading']['symbols'][0]
                     for sym in self.config['trading']['symbols']:
                         self._update_direction_streak(sym, direction, d.profit)
+                # Track recent-loss timestamp and set opposite-direction cooldown
+                if d.profit < 0 and sym_for_ban:
+                    self._last_loss_ts[sym_for_ban] = time.time()
+                    if direction:
+                        opp = 'SELL' if direction == 'BUY' else 'BUY'
+                        cooldown_min = self.config.get(
+                            'direction_ban', {}
+                        ).get('opposite_cooldown_min', 30)
+                        self._opposite_cooldown[sym_for_ban] = {
+                            'direction': opp,
+                            'until':     time.time() + cooldown_min * 60,
+                        }
+                        self.logger.info(
+                            f"{sym_for_ban}: opposite-direction ({opp}) cooldown "
+                            f"{cooldown_min}min after {direction} loss"
+                        )
                 # Brain memory: record close + self-review
                 try:
                     outcome = 'win' if d.profit > 0 else ('breakeven' if d.profit == 0 else 'loss')
@@ -1314,9 +1515,29 @@ class TradingEngine:
 
         stats = get_trade_stats()
 
+        bal = account_info.balance
+        daily_loss_pct   = (self.risk.daily_start_balance - bal) / max(self.risk.daily_start_balance, 1)
+        weekly_loss_pct  = (self.risk.weekly_start_balance - bal) / max(self.risk.weekly_start_balance, 1)
+        daily_limit_hit  = daily_loss_pct  >= self.risk._cfg.get('max_daily_loss',  0.04)
+        weekly_limit_hit = weekly_loss_pct >= self.risk._cfg.get('max_weekly_loss', 0.10)
+        dd_limit_hit     = self.risk.current_drawdown(bal) >= self.risk._cfg.get('max_drawdown', 0.08)
+
+        if self.risk._trading_halted:
+            risk_lock = 'HALTED'
+        elif dd_limit_hit:
+            risk_lock = 'DD_BREACH'
+        elif weekly_limit_hit:
+            risk_lock = 'WEEKLY_LIMIT'
+        elif daily_limit_hit:
+            risk_lock = 'DAILY_LIMIT'
+        elif not self.risk.check_adaptive_cooldown():
+            risk_lock = 'COOLDOWN'
+        else:
+            risk_lock = 'OK'
+
         write_state({
             'timestamp':           datetime.now().isoformat(timespec='seconds'),
-            'balance':             account_info.balance,
+            'balance':             bal,
             'equity':              account_info.equity,
             'initial_balance':     self.risk.initial_balance,
             'peak_balance':        self.risk.peak_balance,
@@ -1325,20 +1546,22 @@ class TradingEngine:
             'terminal':            self._terminal,
             'symbols':             symbols_dash,
             'open_trades':         positions_data,
-            'drawdown_pct':        round(
-                self.risk.current_drawdown(account_info.balance) * 100, 2
-            ),
-            'daily_pnl':           round(
-                self.risk.daily_pnl(account_info.balance), 2
-            ),
+            'drawdown_pct':        round(self.risk.current_drawdown(bal) * 100, 2),
+            'daily_pnl':           round(self.risk.daily_pnl(bal), 2),
+            'weekly_pnl':          round(self.risk.weekly_pnl(bal), 2),
             'daily_start_balance': self.risk.daily_start_balance,
+            'weekly_start_balance':self.risk.weekly_start_balance,
+            'risk_lock':           risk_lock,
+            'trading_halted':      self.risk._trading_halted,
             'stats': {
                 'total_trades': stats.get('total_trades', 0),
                 'wins':         stats.get('wins', 0),
                 'losses':       stats.get('losses', 0),
                 'win_rate':     round(stats.get('win_rate', 0) / 100, 4),
-                'today_pnl':    round(self.risk.daily_pnl(account_info.balance), 2),
+                'today_pnl':    round(self.risk.daily_pnl(bal), 2),
+                'weekly_pnl':   round(self.risk.weekly_pnl(bal), 2),
                 'total_profit': stats.get('total_profit', 0),
+                'profit_factor':stats.get('profit_factor', 0),
             },
             'autonomy': self.cold_start_manager.get_status(),
         })

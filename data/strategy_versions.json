@@ -1,0 +1,27 @@
+[
+  {
+    "version_id": 1,
+    "timestamp": "2026-05-29T07:55:12",
+    "source": "initial",
+    "params": {
+      "strategy.ema_fast": 50,
+      "strategy.ema_slow": 200,
+      "strategy.rsi_period": 14,
+      "strategy.rsi_buy_min": 45,
+      "strategy.rsi_buy_max": 75,
+      "strategy.rsi_sell_min": 25,
+      "strategy.rsi_sell_max": 55,
+      "strategy.atr_period": 14,
+      "strategy.min_confluence": 3,
+      "strategy.adx_trend_threshold": 25,
+      "strategy.adx_range_threshold": 18,
+      "risk.atr_sl_multiplier": 1.8,
+      "risk.atr_tp_multiplier": 3.6,
+      "risk.min_rr_ratio": 1.8
+    },
+    "backtest_metrics": {},
+    "live_metrics": {},
+    "deployed": true,
+    "notes": "Seeded from config.yaml on first run"
+  }
+]

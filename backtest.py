@@ -497,22 +497,39 @@ def _print_section(title: str, data: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Run a strategy backtest')
-    parser.add_argument('--symbol',       default='XAUUSD',  help='Trading symbol')
-    parser.add_argument('--timeframe',    default='M15',     help='Timeframe e.g. M15 H1')
-    parser.add_argument('--bars',         type=int, default=5_000)
-    parser.add_argument('--balance',      type=float, default=10_000.0)
-    parser.add_argument('--commission',   type=float, default=7.0)
-    parser.add_argument('--csv',          default=None)
-    parser.add_argument('--plot',         action='store_true')
-    parser.add_argument('--save-csv',     default=None)
-    parser.add_argument('--walk-forward', action='store_true',
+    parser.add_argument('--symbol',        default='XAUUSD',  help='Trading symbol')
+    parser.add_argument('--timeframe',     default='M15',     help='Timeframe e.g. M15 H1')
+    parser.add_argument('--bars',          type=int, default=5_000)
+    parser.add_argument('--balance',       type=float, default=10_000.0)
+    parser.add_argument('--commission',    type=float, default=7.0)
+    parser.add_argument('--csv',           default=None)
+    parser.add_argument('--plot',          action='store_true')
+    parser.add_argument('--save-csv',      default=None)
+    parser.add_argument('--walk-forward',  action='store_true',
                         help='Run walk-forward validation')
-    parser.add_argument('--wf-splits',    type=int, default=6)
-    parser.add_argument('--monte-carlo',  type=int, default=0,
+    parser.add_argument('--wf-splits',     type=int, default=6)
+    parser.add_argument('--monte-carlo',   type=int, default=0,
                         help='Run N Monte Carlo simulations (0 = skip)')
+    # Strategy versioning options
+    parser.add_argument('--save-version',  action='store_true',
+                        help='Save backtest result as a new strategy version')
+    parser.add_argument('--compare',       action='store_true',
+                        help='Compare result against current deployed version')
+    parser.add_argument('--deploy',        action='store_true',
+                        help='Auto-deploy if --compare passes acceptance criteria')
+    parser.add_argument('--rollback',      type=int, default=0,
+                        help='Roll back to a specific version ID (0 = skip)')
     args = parser.parse_args()
 
     config = _load_config()
+
+    # ── Rollback mode ─────────────────────────────────────────────────────────
+    if args.rollback > 0:
+        from strategy_versioning import StrategyVersionManager
+        svm    = StrategyVersionManager(config)
+        params = svm.rollback(args.rollback)
+        _print_section(f"ROLLED BACK TO v{args.rollback}", params)
+        return
 
     if args.csv:
         df = load_csv(args.csv)
@@ -526,16 +543,55 @@ def main() -> None:
     metrics = engine.run(df)
     _print_section(f"BACKTEST RESULTS  |  {args.symbol}  {args.timeframe}", metrics)
 
+    # ── Strategy versioning: compare and/or save ──────────────────────────────
+    if args.compare or args.save_version:
+        from strategy_versioning import StrategyVersionManager
+        svm = StrategyVersionManager(config)
+
+        if args.compare:
+            accepted, reasons = svm.is_better_than_current(metrics)
+            _print_section("VERSION COMPARISON", {
+                'current_version':  svm.get_current_version().get('version_id', '—'),
+                'accepted':         accepted,
+                'reasons':          ' | '.join(reasons),
+            })
+
+            if accepted and args.deploy:
+                curr_params = svm.extract_params(config)
+                vid = svm.save_version(
+                    params           = curr_params,
+                    backtest_metrics = metrics,
+                    source           = 'backtest_cli',
+                    notes            = 'CLI --compare --deploy',
+                    deploy           = True,
+                )
+                logger.info(f"Deployed new version v{vid}")
+
+        elif args.save_version:
+            curr_params = svm.extract_params(config)
+            vid = svm.save_version(
+                params           = curr_params,
+                backtest_metrics = metrics,
+                source           = 'backtest_cli',
+                notes            = f'Saved from CLI: {args.symbol} {args.timeframe}',
+                deploy           = False,
+            )
+            _print_section(f"SAVED AS VERSION v{vid}", {
+                'version_id':    vid,
+                'profit_factor': metrics.get('profit_factor', '—'),
+                'max_drawdown':  metrics.get('max_drawdown_pct', '—'),
+                'win_rate':      metrics.get('win_rate_pct', '—'),
+                'note':          'Use --deploy to activate this version',
+            })
+
     if args.walk_forward:
-        engine2 = BacktestEngine(config, args.symbol, args.balance, args.commission)
-        engine2.run(df)   # populate trades so walk_forward has history
-        wf_engine = BacktestEngine(config, args.symbol, args.balance, args.commission)
+        wf_engine  = BacktestEngine(config, args.symbol, args.balance, args.commission)
         wf_results = wf_engine.walk_forward(df, n_splits=args.wf_splits)
         if wf_results:
-            avg_wr  = np.mean([r.get('win_rate_pct', 0)   for r in wf_results])
-            avg_pf  = np.mean([r.get('profit_factor', 0)  for r in wf_results])
-            avg_sh  = np.mean([r.get('sharpe_ratio', 0)   for r in wf_results])
-            avg_dd  = np.mean([r.get('max_drawdown_pct',0) for r in wf_results])
+            avg_wr = np.mean([r.get('win_rate_pct', 0)    for r in wf_results])
+            avg_pf = np.mean([r.get('profit_factor', 0)   for r in wf_results])
+            avg_sh = np.mean([r.get('sharpe_ratio', 0)    for r in wf_results])
+            avg_dd = np.mean([r.get('max_drawdown_pct', 0) for r in wf_results])
             _print_section(f"WALK-FORWARD SUMMARY  ({len(wf_results)} folds)", {
                 'avg_win_rate_pct':   round(avg_wr, 2),
                 'avg_profit_factor':  round(avg_pf, 3),

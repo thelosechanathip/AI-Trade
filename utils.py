@@ -9,7 +9,7 @@ import logging.handlers
 import sqlite3
 import numpy as np
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -278,6 +278,22 @@ def init_db() -> None:
     ''')
     conn.commit()
 
+    # Migration: add enriched journal columns if they don't exist yet.
+    # SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we check
+    # the column list first and add only what's missing.
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(trades)")}
+    migrations = [
+        ("session",      "TEXT DEFAULT ''"),    # LONDON / NEW_YORK / LONDON_NY / TOKYO / OFF_HOURS
+        ("regime",       "TEXT DEFAULT ''"),    # TREND / RANGE / HIGH_VOL
+        ("final_score",  "REAL DEFAULT 0.0"),   # composite quality score 0-1
+        ("spread_pips",  "REAL DEFAULT 0.0"),   # spread at entry in pips
+        ("close_reason", "TEXT DEFAULT ''"),    # SL / TP / EXIT_INTEL / MANUAL
+    ]
+    for col, col_def in migrations:
+        if col not in existing_cols:
+            conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {col_def}")
+    conn.commit()
+
     conn.execute("DELETE FROM activity_log WHERE LENGTH(ts) <= 8")
     conn.commit()
     conn.close()
@@ -329,25 +345,48 @@ def get_recent_activity(symbol: Optional[str] = None, limit: int = 20) -> list:
 
 def insert_trade(trade: dict) -> None:
     conn = sqlite3.connect(str(DB_PATH))
+    # Provide defaults for enriched fields so older callers don't break.
+    row = {
+        'ticket':       trade['ticket'],
+        'symbol':       trade['symbol'],
+        'direction':    trade['direction'],
+        'lot_size':     trade['lot_size'],
+        'entry_price':  trade['entry_price'],
+        'sl_price':     trade['sl_price'],
+        'tp_price':     trade['tp_price'],
+        'open_time':    trade['open_time'],
+        'ai_confidence':trade.get('ai_confidence', 0),
+        'session':      trade.get('session', ''),
+        'regime':       trade.get('regime', ''),
+        'final_score':  trade.get('final_score', 0.0),
+        'spread_pips':  trade.get('spread_pips', 0.0),
+    }
     conn.execute(
         '''INSERT OR REPLACE INTO trades
            (ticket, symbol, direction, lot_size, entry_price, sl_price, tp_price,
-            open_time, ai_confidence, status)
+            open_time, ai_confidence, session, regime, final_score, spread_pips, status)
            VALUES (:ticket, :symbol, :direction, :lot_size, :entry_price,
-                   :sl_price, :tp_price, :open_time, :ai_confidence, 'open')''',
-        trade,
+                   :sl_price, :tp_price, :open_time, :ai_confidence,
+                   :session, :regime, :final_score, :spread_pips, 'open')''',
+        row,
     )
     conn.commit()
     conn.close()
 
 
-def close_trade_db(ticket: int, close_price: float, close_time: str, profit: float) -> None:
+def close_trade_db(
+    ticket: int,
+    close_price: float,
+    close_time: str,
+    profit: float,
+    close_reason: str = '',
+) -> None:
     conn = sqlite3.connect(str(DB_PATH))
     conn.execute(
         '''UPDATE trades
-           SET close_price=?, close_time=?, profit=?, status='closed'
+           SET close_price=?, close_time=?, profit=?, close_reason=?, status='closed'
            WHERE ticket=?''',
-        (close_price, close_time, profit, ticket),
+        (close_price, close_time, profit, close_reason, ticket),
     )
     conn.commit()
     conn.close()
@@ -408,6 +447,149 @@ def get_trade_stats() -> dict:
         'total_trades':  len(profits),
         'total_profit':  round(sum(profits), 2),
     }
+
+
+# ── Learning analytics ────────────────────────────────────────────────────────
+
+def get_context_performance(
+    direction:    Optional[str] = None,
+    session:      Optional[str] = None,
+    regime:       Optional[str] = None,
+    min_conf:     Optional[float] = None,
+    max_conf:     Optional[float] = None,
+    lookback_days: int = 60,
+) -> dict:
+    """
+    Query closed trades filtered by context (session/regime/direction/confidence)
+    and return performance statistics.
+
+    Returns dict with keys: total, wins, losses, win_rate, profit_factor,
+    avg_profit, enough_data (True when total >= 8).
+    """
+    empty = {
+        'total': 0, 'wins': 0, 'losses': 0,
+        'win_rate': 0.5, 'profit_factor': 1.0,
+        'avg_profit': 0.0, 'enough_data': False,
+    }
+    if not DB_PATH.exists():
+        return empty
+
+    since = (datetime.now() - timedelta(days=lookback_days)).isoformat()
+
+    conditions = ["status='closed'", "close_time >= ?", "profit IS NOT NULL"]
+    params: list = [since]
+
+    if direction:
+        conditions.append("direction = ?")
+        params.append(direction)
+    if session:
+        conditions.append("session = ?")
+        params.append(session)
+    if regime:
+        conditions.append("regime = ?")
+        params.append(regime)
+    if min_conf is not None:
+        conditions.append("final_score >= ?")
+        params.append(min_conf)
+    if max_conf is not None:
+        conditions.append("final_score < ?")
+        params.append(max_conf)
+
+    sql = f"SELECT profit FROM trades WHERE {' AND '.join(conditions)}"
+
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        rows = conn.execute(sql, params).fetchall()
+        conn.close()
+    except Exception:
+        return empty
+
+    profits = [r[0] for r in rows if r[0] is not None]
+    if not profits:
+        return empty
+
+    wins_list   = [p for p in profits if p > 0]
+    losses_list = [p for p in profits if p < 0]
+    total       = len(profits)
+    win_rate    = len(wins_list) / total
+    gp          = sum(wins_list)
+    gl          = abs(sum(losses_list)) if losses_list else 0.0
+    pf          = gp / gl if gl > 0 else (float('inf') if gp > 0 else 0.0)
+
+    return {
+        'total':        total,
+        'wins':         len(wins_list),
+        'losses':       len(losses_list),
+        'win_rate':     round(win_rate, 4),
+        'profit_factor':round(pf, 3),
+        'avg_profit':   round(sum(profits) / total, 2),
+        'enough_data':  total >= 8,
+    }
+
+
+def compute_context_penalty(
+    session:      str,
+    regime:       str,
+    direction:    str,
+    final_score:  float,
+    lookback_days: int = 60,
+    min_trades:   int = 8,
+    block_wr:     float = 0.20,
+    penalty_wr:   float = 0.38,
+) -> Tuple[float, bool, list]:
+    """
+    Compute a context-based score penalty from historical trade performance.
+
+    Checks three contexts:
+      1. Session  (e.g. LONDON)
+      2. Regime   (e.g. RANGE)
+      3. Direction (BUY / SELL)
+
+    For each context with enough data (>= min_trades):
+      - win_rate < block_wr (default 20%)  → block entirely
+      - win_rate < penalty_wr (default 38%) → add penalty to score
+
+    Penalty sizes:
+      session   penalty: 0.08
+      regime    penalty: 0.07
+      direction penalty: 0.06
+
+    Returns (penalty: float, block: bool, reasons: list[str])
+    """
+    penalty = 0.0
+    block   = False
+    reasons: list = []
+
+    checks = [
+        ('session',   {'session': session},   0.08),
+        ('regime',    {'regime': regime},      0.07),
+        ('direction', {'direction': direction}, 0.06),
+    ]
+
+    for label, filters, pen_size in checks:
+        stats = get_context_performance(
+            **filters, lookback_days=lookback_days
+        )
+        if not stats['enough_data'] or stats['total'] < min_trades:
+            continue
+
+        wr = stats['win_rate']
+        n  = stats['total']
+
+        if wr < block_wr:
+            block = True
+            reasons.append(
+                f"BLOCK: {label}={list(filters.values())[0]} "
+                f"win_rate={wr:.0%} ({n} trades) < {block_wr:.0%}"
+            )
+        elif wr < penalty_wr:
+            penalty += pen_size
+            reasons.append(
+                f"penalty -{pen_size:.0%}: {label}={list(filters.values())[0]} "
+                f"win_rate={wr:.0%} ({n} trades)"
+            )
+
+    return round(min(penalty, 0.20), 4), block, reasons
 
 
 # ── Shared state JSON (live → dashboard) ─────────────────────────────────────

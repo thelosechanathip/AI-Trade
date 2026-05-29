@@ -18,6 +18,12 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
+
+def _iso_week(d: date) -> int:
+    """Return ISO year*100+week to uniquely identify a calendar week."""
+    y, w, _ = d.isocalendar()
+    return y * 100 + w
+
 logger = logging.getLogger('AI-Trade')
 
 _STATE_FILE = Path('data/risk_state.json')
@@ -27,10 +33,12 @@ class RiskManager:
     def __init__(self, config: dict):
         self._cfg = config['risk']
 
-        self.initial_balance:     float = 0.0
-        self.peak_balance:        float = 0.0
-        self.daily_start_balance: float = 0.0
-        self._current_day:        date  = datetime.now().date()
+        self.initial_balance:      float = 0.0
+        self.peak_balance:         float = 0.0
+        self.daily_start_balance:  float = 0.0
+        self.weekly_start_balance: float = 0.0
+        self._current_day:         date  = datetime.now().date()
+        self._current_week:        int   = _iso_week(datetime.now().date())
 
         self._loss_streak:  int  = 0
         self._last_result:  str  = ''   # 'win' | 'loss' | ''
@@ -52,6 +60,7 @@ class RiskManager:
             self.initial_balance          = float(s.get('initial_balance',          0.0))
             self.peak_balance             = float(s.get('peak_balance',             0.0))
             self.daily_start_balance      = float(s.get('daily_start_balance',      0.0))
+            self.weekly_start_balance     = float(s.get('weekly_start_balance',     0.0))
             self._loss_streak             = int(s.get('loss_streak',                0))
             self._global_loss_streak      = int(s.get('global_loss_streak',         0))
             self._global_cooldown_until   = float(s.get('global_cooldown_until',    0.0))
@@ -59,6 +68,8 @@ class RiskManager:
             self._current_day             = date.fromisoformat(
                 s.get('current_day', str(datetime.now().date()))
             )
+            self._current_week            = int(s.get('current_week',
+                                                _iso_week(datetime.now().date())))
         except Exception as exc:
             logger.warning(f"RiskManager: could not load state: {exc}")
 
@@ -68,7 +79,9 @@ class RiskManager:
             'initial_balance':        self.initial_balance,
             'peak_balance':           self.peak_balance,
             'daily_start_balance':    self.daily_start_balance,
+            'weekly_start_balance':   self.weekly_start_balance,
             'current_day':            str(self._current_day),
+            'current_week':           self._current_week,
             'loss_streak':            self._loss_streak,
             'global_loss_streak':     self._global_loss_streak,
             'global_cooldown_until':  self._global_cooldown_until,
@@ -78,18 +91,26 @@ class RiskManager:
     # ── Balance update ────────────────────────────────────────────────────────
 
     def update_balance(self, balance: float) -> None:
-        today = datetime.now().date()
+        today      = datetime.now().date()
+        this_week  = _iso_week(today)
 
         if self.initial_balance == 0.0:
-            self.initial_balance     = balance
-            self.daily_start_balance = balance
-            self.peak_balance        = balance
+            self.initial_balance      = balance
+            self.daily_start_balance  = balance
+            self.weekly_start_balance = balance
+            self.peak_balance         = balance
+            self._current_week        = this_week
             logger.info(f"RiskManager initialised | starting balance: {balance:.2f}")
 
         if today > self._current_day:
             self.daily_start_balance = balance
             self._current_day        = today
             logger.info(f"New trading day — daily baseline reset to {balance:.2f}")
+
+        if this_week != self._current_week:
+            self.weekly_start_balance = balance
+            self._current_week        = this_week
+            logger.info(f"New trading week — weekly baseline reset to {balance:.2f}")
 
         if balance > self.peak_balance:
             self.peak_balance = balance
@@ -198,6 +219,23 @@ class RiskManager:
             )
             return False
         return True
+
+    def check_weekly_loss_limit(self, balance: float) -> bool:
+        """Block new trades when weekly loss exceeds max_weekly_loss (default 10%)."""
+        limit = self._cfg.get('max_weekly_loss', 0.10)
+        if self.weekly_start_balance <= 0:
+            return True
+        loss_pct = (self.weekly_start_balance - balance) / self.weekly_start_balance
+        if loss_pct >= limit:
+            logger.warning(
+                f"WEEKLY loss limit reached: {loss_pct:.2%} "
+                f"(threshold {limit:.2%}). No new trades until next week."
+            )
+            return False
+        return True
+
+    def weekly_pnl(self, balance: float) -> float:
+        return balance - self.weekly_start_balance
 
     def check_drawdown_limit(self, balance: float) -> bool:
         if self.peak_balance <= 0:
