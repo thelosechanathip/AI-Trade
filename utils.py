@@ -288,6 +288,9 @@ def init_db() -> None:
         ("final_score",  "REAL DEFAULT 0.0"),   # composite quality score 0-1
         ("spread_pips",  "REAL DEFAULT 0.0"),   # spread at entry in pips
         ("close_reason", "TEXT DEFAULT ''"),    # SL / TP / EXIT_INTEL / MANUAL
+        ("committee_verdict", "TEXT DEFAULT ''"),
+        ("committee_score", "REAL DEFAULT 0.0"),
+        ("committee_risk_multiplier", "REAL DEFAULT 1.0"),
     ]
     for col, col_def in migrations:
         if col not in existing_cols:
@@ -360,14 +363,20 @@ def insert_trade(trade: dict) -> None:
         'regime':       trade.get('regime', ''),
         'final_score':  trade.get('final_score', 0.0),
         'spread_pips':  trade.get('spread_pips', 0.0),
+        'committee_verdict': trade.get('committee_verdict', ''),
+        'committee_score': trade.get('committee_score', 0.0),
+        'committee_risk_multiplier': trade.get('committee_risk_multiplier', 1.0),
     }
     conn.execute(
         '''INSERT OR REPLACE INTO trades
            (ticket, symbol, direction, lot_size, entry_price, sl_price, tp_price,
-            open_time, ai_confidence, session, regime, final_score, spread_pips, status)
+            open_time, ai_confidence, session, regime, final_score, spread_pips,
+            committee_verdict, committee_score, committee_risk_multiplier, status)
            VALUES (:ticket, :symbol, :direction, :lot_size, :entry_price,
                    :sl_price, :tp_price, :open_time, :ai_confidence,
-                   :session, :regime, :final_score, :spread_pips, 'open')''',
+                   :session, :regime, :final_score, :spread_pips,
+                   :committee_verdict, :committee_score,
+                   :committee_risk_multiplier, 'open')''',
         row,
     )
     conn.commit()

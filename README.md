@@ -37,6 +37,8 @@ Market Data (MT5 API)
         |
   Risk Intelligence        <- Kelly sizing + DD scaling + cold-start reduction
         |
+  Committee Guard          <- Director/Quant/Risk/Execution final review
+        |
      Execute               <- MT5 order placement
         |
   Exit Intelligence        <- Re-evaluates open positions every 60s
@@ -310,6 +312,7 @@ AI-Trade/
 |-- noise_filter.py            # Noise rejection (doji/micro/parabolic)
 |-- anti_chase.py              # Anti-chase engine (overextension guard)
 |-- context_persistence.py     # Slow-decaying directional bias
+|-- committee_guard.py         # Final Director/Quant/Risk/Execution gate
 |-- exit_intelligence.py       # Proactive exit system
 |-- brain_memory.py            # SQLite long-term memory
 |-- uncertainty_engine.py      # 5-component uncertainty scorer

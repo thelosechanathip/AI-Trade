@@ -53,6 +53,7 @@ from noise_filter         import NoiseFilter
 from anti_chase           import AntiChaseEngine
 from context_persistence  import ContextPersistenceEngine
 from strategy_versioning  import StrategyVersionManager
+from committee_guard      import InvestmentCommitteeGuard
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -137,6 +138,7 @@ class TradingEngine:
         self.context_persistence  = ContextPersistenceEngine(
             ema_alpha=0.20, flip_threshold=0.72, min_cycles_before_flip=3
         )
+        self.committee_guard      = InvestmentCommitteeGuard(self.config)
 
         self.running              = False
         self._ai_last_train_ts    = 0.0
@@ -326,6 +328,23 @@ class TradingEngine:
             }
         except Exception as exc:
             self.logger.debug(f"_collect_terminal_data({symbol}): {exc}")
+
+    @staticmethod
+    def _scale_lot_to_symbol(lot_size: float, scale: float, symbol_info) -> float:
+        """Scale lot size while respecting broker min/max/step constraints."""
+        scale = max(0.0, min(1.0, float(scale)))
+        raw = max(0.0, float(lot_size) * scale)
+        try:
+            step = float(symbol_info.volume_step)
+            vol_min = float(symbol_info.volume_min)
+            vol_max = float(symbol_info.volume_max)
+            if step <= 0:
+                return round(raw, 2)
+            scaled = (raw // step) * step
+            scaled = max(vol_min, min(vol_max, scaled))
+            return round(scaled, 2)
+        except Exception:
+            return round(raw, 2)
 
     # ── News blackout filter ──────────────────────────────────────────────────
 
@@ -1197,6 +1216,58 @@ class TradingEngine:
                 f"conf={conf_scale:.2f} grade={grade_scale:.2f} → {lot_size:.2f}"
             )
 
+        # Final institutional committee gate before live execution.
+        committee = self.committee_guard.review(
+            symbol          = symbol,
+            signal          = signal,
+            final_score     = final_score,
+            adjusted_score  = adjusted_score,
+            grade           = grade,
+            bootstrap_score = bootstrap.score,
+            effective_ai    = effective_ai,
+            brain_decision  = brain_decision,
+            mi_narrative    = mi_narrative,
+            htf_bias        = htf_bias,
+            htf_strength    = htf_strength,
+            adx             = adx_val,
+            rsi             = rsi_val,
+            atr             = atr,
+            close_price     = close,
+            spread_price    = spread_pts,
+            rr              = rr,
+            lot_size        = lot_size,
+            open_count      = open_count,
+            max_trades      = cfg['risk']['max_concurrent_trades'],
+            noise_score     = noise.noise_score,
+            chase_score     = chase.chase_score,
+            drawdown        = self.risk.current_drawdown(balance),
+            session         = self._get_current_session(),
+            autonomy_level  = autonomy_level,
+        )
+        if symbol in self._terminal:
+            self._terminal[symbol]['committee'] = committee.to_dict()
+
+        self.logger.info(
+            f"{symbol}: Committee={committee.verdict} "
+            f"score={committee.score:.0%}/{committee.min_score:.0%} "
+            f"risk_mult={committee.risk_multiplier:.2f}"
+        )
+
+        if not committee.approved:
+            reason = committee.blockers[0] if committee.blockers else committee.verdict
+            log_activity(symbol, f"Committee block: {reason}", 'warning')
+            return
+
+        if committee.risk_multiplier < 1.0:
+            old_lot = lot_size
+            lot_size = self._scale_lot_to_symbol(
+                lot_size, committee.risk_multiplier, sym_info
+            )
+            self.logger.info(
+                f"{symbol}: committee risk scale "
+                f"{committee.risk_multiplier:.2f} | lot {old_lot:.2f} -> {lot_size:.2f}"
+            )
+
         # ── 11. Execute ───────────────────────────────────────────────────────
         result = self.executor.place_market_order(
             symbol    = symbol,
@@ -1205,7 +1276,7 @@ class TradingEngine:
             sl_price  = sl_price,
             tp_price  = tp_price,
             magic     = magic,
-            comment   = f"AI-Trade|{signal}|{ai_confidence}%",
+            comment   = f"AI-Trade|{signal}|{ai_confidence}%|C{int(committee.score * 100)}",
         )
 
         if result:
@@ -1248,6 +1319,9 @@ class TradingEngine:
                 'regime':        regime,
                 'final_score':   round(adjusted_score, 4),
                 'spread_pips':   round(entry_spread, 2),
+                'committee_verdict': committee.verdict,
+                'committee_score':   round(committee.score, 4),
+                'committee_risk_multiplier': round(committee.risk_multiplier, 4),
             })
 
     # ── Progressive autonomy level management ────────────────────────────────
@@ -1573,6 +1647,7 @@ class TradingEngine:
                 'mi_quality':      term.get('mi_quality', 0.0),
                 'mi_block_buy':    term.get('mi_block_buy', False),
                 'mi_block_sell':   term.get('mi_block_sell', False),
+                'committee':       term.get('committee', {}),
             }
 
         stats = get_trade_stats()

@@ -133,6 +133,23 @@ dashboard:
   refresh_interval: 5
   port: 8000
 
+committee_guard:
+  enabled: true
+  fail_closed: true
+  min_score: 0.58
+  min_score_safe: 0.70
+  min_agent_approvals: 3
+  min_adjusted_score: 0.42
+  max_uncertainty: 0.78
+  max_reversal_probability: 0.76
+  max_noise_score: 0.62
+  max_chase_score: 0.62
+  max_spread_atr_ratio: 0.12
+  warning_spread_atr_ratio: 0.09
+  htf_conflict_strength: 0.60
+  blocked_regimes: ["HIGH_VOL", "EXHAUSTION"]
+  caution_regimes: ["RANGE", "REVERSAL", "LIQUIDITY_GRAB", "ACCUMULATION", "DISTRIBUTION"]
+
 logging:
   level: "INFO"
   file: "logs/trading.log"

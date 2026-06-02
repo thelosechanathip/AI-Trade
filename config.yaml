@@ -165,6 +165,23 @@ learning_analytics:
   penalty_win_rate: 0.38
   lookback_days: 60
 
+committee_guard:
+  enabled: true
+  fail_closed: true
+  min_score: 0.62
+  min_score_safe: 0.74
+  min_agent_approvals: 3
+  min_adjusted_score: 0.45
+  max_uncertainty: 0.72
+  max_reversal_probability: 0.70
+  max_noise_score: 0.58
+  max_chase_score: 0.58
+  max_spread_atr_ratio: 0.10
+  warning_spread_atr_ratio: 0.07
+  htf_conflict_strength: 0.55
+  blocked_regimes: ["HIGH_VOL", "EXHAUSTION"]
+  caution_regimes: ["RANGE", "REVERSAL", "LIQUIDITY_GRAB", "ACCUMULATION", "DISTRIBUTION"]
+
 logging:
   level: "DEBUG"
   file: "logs/trading.log"
