@@ -32,6 +32,25 @@ class MT5Executor:
         """Translate config symbol name to the real broker name."""
         return self._symbol_map.get(symbol, symbol)
 
+    def actual_symbol(self, symbol: str) -> str:
+        """Public wrapper for code that needs to compare MT5 position symbols."""
+        return self._actual(symbol)
+
+    def canonical_symbol(self, broker_symbol: str) -> str:
+        """Translate a broker symbol back to the configured symbol when possible."""
+        broker_upper = (broker_symbol or '').upper()
+        for configured, actual in self._symbol_map.items():
+            if broker_upper == actual.upper():
+                return configured
+        for configured, actual in self._symbol_map.items():
+            cfg_upper = configured.upper()
+            act_upper = actual.upper()
+            if broker_upper.startswith(cfg_upper) or cfg_upper in broker_upper:
+                return configured
+            if broker_upper == act_upper:
+                return configured
+        return broker_symbol
+
     def _wait_terminal_connected(self, timeout: int = 30) -> bool:
         """
         Block until terminal_info().connected is True.
@@ -203,6 +222,10 @@ class MT5Executor:
         if not positions:
             return []
         return [p for p in positions if p.magic == magic]
+
+    def get_magic_positions(self, magic: int) -> List:
+        """Return only positions opened by this strategy magic number."""
+        return [p for p in self.get_all_open_positions() if p.magic == magic]
 
     def symbol_has_position(self, symbol: str, magic: int) -> bool:
         return len(self.get_positions_for_symbol(symbol, magic)) > 0

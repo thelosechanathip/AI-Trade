@@ -24,6 +24,7 @@ Usage
 
 import sys
 import time
+import json
 import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -155,6 +156,8 @@ class TradingEngine:
         # symbol -> {'direction': 'BUY'|'SELL', 'until': float} — 30min cooldown for
         # the OPPOSITE direction after a loss (prevents immediate flip trading)
         self._opposite_cooldown: dict = {}
+        self._guard_state_file = Path('data/trade_guard_state.json')
+        self._load_trade_guard_state()
 
         # Strategy version manager — seeds v1 from config on first run
         self.version_manager = StrategyVersionManager(self.config)
@@ -170,6 +173,55 @@ class TradingEngine:
         self.logger.info("=" * 60)
 
     # ── Session state restore ─────────────────────────────────────────────────
+
+    def _load_trade_guard_state(self) -> None:
+        """Restore cooldown/ban state so a restart cannot erase loss protection."""
+        if not self._guard_state_file.exists():
+            return
+        try:
+            state = json.loads(self._guard_state_file.read_text(encoding='utf-8'))
+            now = time.time()
+            self._last_trade_ts = {
+                str(k): float(v) for k, v in state.get('last_trade_ts', {}).items()
+            }
+            self._last_loss_ts = {
+                str(k): float(v) for k, v in state.get('last_loss_ts', {}).items()
+            }
+            self._dir_loss_streak = {
+                str(sym): {
+                    'BUY': int(vals.get('BUY', 0)),
+                    'SELL': int(vals.get('SELL', 0)),
+                }
+                for sym, vals in state.get('dir_loss_streak', {}).items()
+                if isinstance(vals, dict)
+            }
+            self._direction_ban = {
+                str(sym): entry
+                for sym, entry in state.get('direction_ban', {}).items()
+                if isinstance(entry, dict) and float(entry.get('until', 0)) > now
+            }
+            self._opposite_cooldown = {
+                str(sym): entry
+                for sym, entry in state.get('opposite_cooldown', {}).items()
+                if isinstance(entry, dict) and float(entry.get('until', 0)) > now
+            }
+            self.logger.info("Restored trade guard state from disk")
+        except Exception as exc:
+            self.logger.warning(f"Could not restore trade guard state: {exc}")
+
+    def _save_trade_guard_state(self) -> None:
+        """Persist entry cooldowns and direction loss guards."""
+        try:
+            self._guard_state_file.parent.mkdir(parents=True, exist_ok=True)
+            self._guard_state_file.write_text(json.dumps({
+                'last_trade_ts': self._last_trade_ts,
+                'last_loss_ts': self._last_loss_ts,
+                'dir_loss_streak': self._dir_loss_streak,
+                'direction_ban': self._direction_ban,
+                'opposite_cooldown': self._opposite_cooldown,
+            }, indent=2), encoding='utf-8')
+        except Exception as exc:
+            self.logger.debug(f"Could not save trade guard state: {exc}")
 
     def _restore_open_trades(self) -> None:
         """Re-populate _known_tickets from DB open trades so restarts don't lose tracking."""
@@ -454,12 +506,20 @@ class TradingEngine:
             return False
         if time.time() > entry['until']:
             del self._direction_ban[symbol]
+            self._save_trade_guard_state()
             return False
 
         remaining  = (entry['until'] - time.time()) / 3600
-        ban_type   = entry.get('type', 'hard')
+        ban_type = entry.get('type', 'hard')
+        if ban_type == 'soft':
+            self.logger.info(
+                f"{symbol}: direction {direction} SOFT guard active "
+                f"for {remaining:.1f}h more (lot/score penalties still apply)"
+            )
+            return False
+
         self.logger.info(
-            f"{symbol}: direction {direction} {ban_type.upper()} BANNED "
+            f"{symbol}: direction {direction} HARD BANNED "
             f"for {remaining:.1f}h more"
         )
         return True
@@ -552,6 +612,7 @@ class TradingEngine:
                 self.logger.info(
                     f"{symbol}: {direction} direction ban lifted after a winning trade"
                 )
+        self._save_trade_guard_state()
 
     # ── Session classifier ────────────────────────────────────────────────────
 
@@ -592,6 +653,7 @@ class TradingEngine:
             return False
         if time.time() > entry['until']:
             del self._opposite_cooldown[symbol]
+            self._save_trade_guard_state()
             return False
         remaining_min = (entry['until'] - time.time()) / 60
         self.logger.info(
@@ -635,10 +697,7 @@ class TradingEngine:
         # (actual signal uses it below after all risk checks pass)
 
         # ── 3. Multi-trade check: allow up to max_concurrent_trades per symbol ──
-        existing_sym_pos = [
-            p for p in self.executor.get_all_open_positions()
-            if p.symbol == symbol and p.magic == magic
-        ]
+        existing_sym_pos = self.executor.get_positions_for_symbol(symbol, magic)
         sym_max = cfg['risk']['max_concurrent_trades']
         if len(existing_sym_pos) >= sym_max:
             self.logger.debug(
@@ -659,7 +718,7 @@ class TradingEngine:
             log_activity(symbol, "Adaptive cooldown — พักการเทรดหลังขาดทุนต่อเนื่อง", 'warning')
             return
 
-        all_positions = self.executor.get_all_open_positions()
+        all_positions = self.executor.get_magic_positions(magic)
         if not self.risk.can_open_trade(len(all_positions)):
             return
 
@@ -1151,6 +1210,7 @@ class TradingEngine:
 
         if result:
             self._last_trade_ts[symbol] = time.time()   # start cooldown
+            self._save_trade_guard_state()
             # Reset stability tracker: the signal was consumed — next entry needs fresh confirmation
             self.signal_stability.reset(symbol)
             log_activity(
@@ -1335,16 +1395,17 @@ class TradingEngine:
         """Detect positions that were closed (SL/TP hit) and update DB."""
         magic      = self.config['trading']['magic_number']
         now        = datetime.now(timezone.utc)
-        from_ts    = (now - timedelta(hours=24)).timestamp()
+        from_ts    = (now - timedelta(days=7)).timestamp()
 
         deals = self.executor.get_closed_deals(from_ts, now.timestamp(), magic)
         for d in deals:
-            if d.order in self._known_tickets:
+            ticket = int(getattr(d, 'position_id', 0) or getattr(d, 'position', 0) or d.order)
+            if ticket in self._known_tickets:
                 # Deal reason: 3=SL, 4=TP, 0/1=manual or exit-intel
                 _reason_map = {3: 'SL', 4: 'TP', 0: 'MANUAL', 1: 'MANUAL'}
                 close_reason = _reason_map.get(getattr(d, 'reason', -1), 'EXIT_INTEL')
                 close_trade_db(
-                    ticket       = d.order,
+                    ticket       = ticket,
                     close_price  = d.price,
                     close_time   = datetime.fromtimestamp(d.time).isoformat(),
                     profit       = d.profit,
@@ -1352,10 +1413,10 @@ class TradingEngine:
                 )
                 self.risk.record_trade_result(d.profit)
                 # Feed trade outcome back to AI for self-learning
-                direction = self._ticket_direction.pop(d.order, '')
-                self.ai.label_closed_trade(d.order, d.profit, direction)
+                direction = self._ticket_direction.pop(ticket, '')
+                self.ai.label_closed_trade(ticket, d.profit, direction)
                 # Update per-direction loss streak for direction ban
-                sym_for_ban = d.symbol or ''
+                sym_for_ban = self.executor.canonical_symbol(d.symbol or '')
                 if direction and sym_for_ban:
                     self._update_direction_streak(sym_for_ban, direction, d.profit)
                 elif direction:
@@ -1374,6 +1435,7 @@ class TradingEngine:
                             'direction': opp,
                             'until':     time.time() + cooldown_min * 60,
                         }
+                        self._save_trade_guard_state()
                         self.logger.info(
                             f"{sym_for_ban}: opposite-direction ({opp}) cooldown "
                             f"{cooldown_min}min after {direction} loss"
@@ -1381,12 +1443,12 @@ class TradingEngine:
                 # Brain memory: record close + self-review
                 try:
                     outcome = 'win' if d.profit > 0 else ('breakeven' if d.profit == 0 else 'loss')
-                    entry_bar = self._ticket_entry_bar.pop(d.order, 0)
+                    entry_bar = self._ticket_entry_bar.pop(ticket, 0)
                     bars_held = 0  # approximate
                     self.brain_memory.record_trade_close(
-                        d.order, d.price, d.profit, outcome, bars_held
+                        ticket, d.price, d.profit, outcome, bars_held
                     )
-                    bd = self._ticket_brain.get(d.order)
+                    bd = self._ticket_brain.get(ticket)
                     if bd:
                         self.brain_memory.update_learning_feedback(
                             bd.market_regime, outcome, d.profit,
@@ -1397,12 +1459,12 @@ class TradingEngine:
                                 d.symbol or '', direction, bd.market_regime,
                                 bd.signals_active, d.profit, bars_held
                             )
-                    self.brain_memory.self_review(d.order)
+                    self.brain_memory.self_review(ticket)
                 except Exception as exc:
                     self.logger.debug(f"Brain memory post-trade update failed: {exc}")
-                self._ticket_confidence.pop(d.order, None)
-                self._ticket_brain.pop(d.order, None)
-                self._known_tickets.discard(d.order)
+                self._ticket_confidence.pop(ticket, None)
+                self._ticket_brain.pop(ticket, None)
+                self._known_tickets.discard(ticket)
 
     # ── Dashboard state update ────────────────────────────────────────────────
 
