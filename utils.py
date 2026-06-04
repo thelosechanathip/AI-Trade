@@ -420,7 +420,8 @@ def get_open_trades_from_db() -> list:
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
-            "SELECT ticket, symbol, direction, ai_confidence FROM trades WHERE status='open'"
+            "SELECT ticket, symbol, direction, ai_confidence, open_time "
+            "FROM trades WHERE status='open'"
         ).fetchall()
         return [dict(r) for r in rows]
     finally:

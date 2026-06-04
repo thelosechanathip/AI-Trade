@@ -8,9 +8,9 @@ trading:
   magic_number: 20240101
 
 risk:
-  risk_per_trade: 0.001
-  max_concurrent_trades: 1
-  max_per_direction: 1
+  risk_per_trade: 0.0015
+  max_concurrent_trades: 2
+  max_per_direction: 2
   max_daily_loss: 0.015
   max_weekly_loss: 0.04
   max_drawdown: 0.05
@@ -29,10 +29,10 @@ risk:
   adaptive_cooldown:
     enabled: true
     hours_map:
-      1: 4
-      2: 12
-      3: 24
-    halt_at_streak: 3
+      1: 1
+      2: 3
+      3: 8
+    halt_at_streak: 4
 
 strategy:
   ema_fast: 50
@@ -105,7 +105,9 @@ trade_management:
   time_exit_enabled: true
   time_exit_bars: 48
   time_exit_min_r: -0.3
-  cooldown_minutes: 180
+  cooldown_minutes: 60
+  recent_loss_penalty_minutes: 45
+  recent_loss_penalty_score: 0.06
   news_filter_enabled: true
   news_blackout_before: 30
   news_blackout_after: 15
@@ -128,9 +130,9 @@ htf_filter:
 direction_ban:
   enabled: true
   max_same_dir_losses: 2
-  ban_hours: 12
-  ban_hours_soft: 4
-  opposite_cooldown_min: 180
+  ban_hours: 6
+  ban_hours_soft: 2
+  opposite_cooldown_min: 45
 
 trend_dominance:
   enabled: true
@@ -169,7 +171,7 @@ committee_guard:
   enabled: true
   fail_closed: true
   min_score: 0.62
-  min_score_safe: 0.74
+  min_score_safe: 0.66
   min_agent_approvals: 3
   min_adjusted_score: 0.45
   max_uncertainty: 0.72

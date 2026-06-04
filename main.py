@@ -945,17 +945,24 @@ class TradingEngine:
             final_score = max(0.0, final_score - dir_penalty)
 
         # ── Recent loss penalty ───────────────────────────────────────────────
-        # If a loss occurred on this symbol within the last 90 minutes,
-        # apply an extra -0.10 to discourage hot re-entry.
-        recent_loss_window = 90 * 60
+        # If a loss occurred recently on this symbol, apply a small score
+        # penalty. Keep this configurable so frequency can be tuned without
+        # weakening the hard safety blockers.
+        tm_cfg = cfg.get('trade_management', {})
+        recent_loss_window = float(
+            tm_cfg.get('recent_loss_penalty_minutes', 45)
+        ) * 60
+        recent_loss_penalty = float(
+            tm_cfg.get('recent_loss_penalty_score', 0.06)
+        )
         last_loss = self._last_loss_ts.get(symbol, 0)
         if time.time() - last_loss < recent_loss_window:
             elapsed_min = (time.time() - last_loss) / 60
             self.logger.info(
-                f"{symbol}: recent loss penalty -10% "
+                f"{symbol}: recent loss penalty -{recent_loss_penalty:.0%} "
                 f"(last loss {elapsed_min:.0f} min ago)"
             )
-            final_score = max(0.0, final_score - 0.10)
+            final_score = max(0.0, final_score - recent_loss_penalty)
 
         # ── Context-based learning penalty ───────────────────────────────────
         # Uses historical closed-trade stats by session/regime/direction.
@@ -1471,7 +1478,34 @@ class TradingEngine:
         """Detect positions that were closed (SL/TP hit) and update DB."""
         magic      = self.config['trading']['magic_number']
         now        = datetime.now(timezone.utc)
-        from_ts    = (now - timedelta(days=7)).timestamp()
+        from_dt    = now - timedelta(days=7)
+
+        # After the engine has been offline for several days, DB rows can still
+        # be marked open even though MT5 closed them long ago. Query back to the
+        # oldest still-open DB ticket, capped at 60 days, so restart sync can
+        # repair stale dashboard/learning data without an unbounded history scan.
+        try:
+            open_times = []
+            for row in get_open_trades_from_db():
+                raw = row.get('open_time')
+                if not raw:
+                    continue
+                try:
+                    dt = datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    else:
+                        dt = dt.astimezone(timezone.utc)
+                    open_times.append(dt)
+                except Exception:
+                    continue
+            if open_times:
+                earliest = min(open_times) - timedelta(days=1)
+                from_dt = min(from_dt, max(earliest, now - timedelta(days=60)))
+        except Exception as exc:
+            self.logger.debug(f"_sync_closed_positions history window: {exc}")
+
+        from_ts = from_dt.timestamp()
 
         deals = self.executor.get_closed_deals(from_ts, now.timestamp(), magic)
         for d in deals:
