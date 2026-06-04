@@ -716,6 +716,7 @@
       z-index: 2;
       --move-x: 0px;
       --move-y: 0px;
+      --facing: 1;
       transform: translate3d(var(--move-x), var(--move-y), 0);
       transition: transform .9s cubic-bezier(.22, 1, .36, 1), filter .3s ease;
       will-change: transform;
@@ -772,29 +773,54 @@
       color: #cffafe;
     }
     .agent-avatar {
-      width: 64px;
-      height: 78px;
+      width: 82px;
+      height: 96px;
       margin: 0 auto 5px;
-      border-radius: 14px;
+      border-radius: 0;
       display: grid;
       place-items: end;
       font-weight: 900;
-      border: 1px solid rgba(255,255,255,.18);
-      background: linear-gradient(145deg, rgba(6,182,212,.8), rgba(34,197,94,.55));
-      box-shadow: 0 10px 22px rgba(0,0,0,.34);
-      overflow: hidden;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+      overflow: visible;
       position: relative;
     }
+    .agent-avatar::before {
+      content: '';
+      position: absolute;
+      left: 16px;
+      right: 16px;
+      bottom: 4px;
+      height: 12px;
+      border-radius: 999px;
+      background: radial-gradient(ellipse at center, rgba(0,0,0,.48), rgba(0,0,0,0) 72%);
+      filter: blur(3px);
+      z-index: 0;
+    }
     .agent-avatar.sprite-avatar {
-      background-image: url('assets/ai-trade-team-model.png');
+      --sprite-row: 0px;
+      --sprite-speed: 1.8s;
+      filter: drop-shadow(0 9px 12px rgba(0,0,0,.46));
+    }
+    .agent-avatar.sprite-avatar::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      background-image: var(--sprite-sheet);
       background-repeat: no-repeat;
-      background-size: 1024px 683px;
-      background-position: var(--sprite-x) var(--sprite-y);
-      background-color: rgba(17,24,39,.96);
-      box-shadow:
-        inset 0 0 0 1px rgba(139,92,246,.22),
-        0 10px 22px rgba(0,0,0,.34),
-        0 0 18px rgba(139,92,246,.18);
+      background-size: 328px 576px;
+      background-position: 0 var(--sprite-row);
+      transform: scaleX(var(--facing));
+      transform-origin: center bottom;
+      animation: sprite-frames var(--sprite-speed) steps(4) infinite;
+      filter:
+        saturate(1.22)
+        brightness(1.12)
+        drop-shadow(0 0 4px rgba(139,92,246,.42))
+        drop-shadow(0 6px 8px rgba(0,0,0,.48));
+      will-change: background-position, transform;
     }
     .agent-avatar.sprite-avatar span {
       position: absolute;
@@ -810,28 +836,29 @@
       line-height: 1;
       letter-spacing: .4px;
       text-shadow: 0 1px 2px rgba(0,0,0,.7);
+      z-index: 3;
     }
-    .sprite-jame { --sprite-x: -34px; --sprite-y: -100px; }
-    .sprite-nova { --sprite-x: -232px; --sprite-y: -104px; }
-    .sprite-risk { --sprite-x: -420px; --sprite-y: -104px; }
-    .sprite-dex { --sprite-x: -230px; --sprite-y: -390px; }
-    .sprite-vector { --sprite-x: -820px; --sprite-y: -104px; }
+    .sprite-jame { --sprite-sheet: url('assets/team-sprites/jame.png'); }
+    .sprite-nova { --sprite-sheet: url('assets/team-sprites/nova.png'); }
+    .sprite-risk { --sprite-sheet: url('assets/team-sprites/risk.png'); }
+    .sprite-dex { --sprite-sheet: url('assets/team-sprites/dex.png'); }
+    .sprite-vector { --sprite-sheet: url('assets/team-sprites/vector.png'); }
     .agent-token.risk .agent-avatar { background: linear-gradient(145deg, rgba(239,68,68,.85), rgba(245,158,11,.6)); }
     .agent-token.ai .agent-avatar { background: linear-gradient(145deg, rgba(168,85,247,.8), rgba(59,130,246,.65)); }
     .agent-token.exec .agent-avatar { background: linear-gradient(145deg, rgba(245,158,11,.82), rgba(34,197,94,.6)); }
     .agent-token.risk .agent-avatar.sprite-avatar,
     .agent-token.ai .agent-avatar.sprite-avatar,
     .agent-token.exec .agent-avatar.sprite-avatar {
-      background-image: url('assets/ai-trade-team-model.png');
-      background-repeat: no-repeat;
-      background-size: 1024px 683px;
-      background-position: var(--sprite-x) var(--sprite-y);
-      background-color: rgba(17,24,39,.96);
+      background: transparent;
     }
     .agent-token.is-idle .sprite-avatar {
+      --sprite-row: 0px;
+      --sprite-speed: 1.9s;
       animation: agent-breathe 3.6s ease-in-out infinite;
     }
     .agent-token.is-working .sprite-avatar {
+      --sprite-row: -96px;
+      --sprite-speed: 1s;
       animation: agent-work 1.7s ease-in-out infinite;
       box-shadow:
         inset 0 0 0 1px rgba(139,92,246,.34),
@@ -839,7 +866,15 @@
         0 0 24px rgba(139,92,246,.36);
     }
     .agent-token.is-moving .sprite-avatar {
+      --sprite-row: -192px;
+      --sprite-speed: .58s;
       animation: agent-walk .8s ease-in-out infinite;
+    }
+    .agent-token.is-resting .sprite-avatar { --sprite-row: -288px; --sprite-speed: 2.7s; }
+    .agent-token.is-talking .sprite-avatar { --sprite-row: -384px; --sprite-speed: .86s; }
+    .agent-token.is-alerting .sprite-avatar { --sprite-row: -480px; --sprite-speed: .5s; }
+    .agent-token.is-moving .agent-avatar::before {
+      animation: foot-shadow .58s steps(4) infinite;
     }
     .agent-token.is-working::before {
       content: '';
@@ -1008,6 +1043,14 @@
       0%,100% { transform: translateY(0) rotate(-1deg); }
       50% { transform: translateY(-7px) rotate(1deg); }
     }
+    @keyframes sprite-frames {
+      from { background-position: 0 var(--sprite-row); }
+      to { background-position: -328px var(--sprite-row); }
+    }
+    @keyframes foot-shadow {
+      0%,100% { transform: scaleX(.82); opacity: .28; }
+      50% { transform: scaleX(1.18); opacity: .48; }
+    }
     @keyframes agent-rest {
       0%,100% { transform: translateY(1px) scale(.98); }
       50% { transform: translateY(3px) scale(.965); }
@@ -1040,6 +1083,7 @@
     @media (prefers-reduced-motion: reduce) {
       .agent-token,
       .agent-token .sprite-avatar,
+      .agent-token .sprite-avatar::after,
       .agent-token::before,
       .work-node::before,
       .office-room::after {
@@ -1765,12 +1809,19 @@ function setAgentTask(role, task, label, active = true, speech = '') {
   const nextTask = task || 'idle';
   const prevTask = el.dataset.task || '';
   const waypoint = (TEAM_WAYPOINTS[role] && TEAM_WAYPOINTS[role][nextTask]) || TEAM_WAYPOINTS[role]?.idle || {};
+  const nextX = Number(waypoint.x || 0);
+  const prevX = Number(el.dataset.moveX || 0);
+  const fallbackFacing = role === 'risk' || role === 'exec' ? -1 : 1;
+  const facing = nextX === prevX ? Number(el.dataset.facing || fallbackFacing) : (nextX < prevX ? -1 : 1);
   for (const cls of Array.from(el.classList)) {
     if (cls.startsWith('task-')) el.classList.remove(cls);
   }
-  el.style.setProperty('--move-x', `${Number(waypoint.x || 0)}px`);
+  el.style.setProperty('--move-x', `${nextX}px`);
   el.style.setProperty('--move-y', `${Number(waypoint.y || 0)}px`);
   el.style.setProperty('--beam-rot', `${Number(waypoint.beam || -18)}deg`);
+  el.style.setProperty('--facing', facing);
+  el.dataset.moveX = String(nextX);
+  el.dataset.facing = String(facing);
   el.classList.add(`task-${nextTask}`);
   el.classList.toggle('is-working', !!active && !['rest', 'talk', 'huddle'].includes(nextTask));
   el.classList.toggle('is-idle', !active && nextTask !== 'rest');
