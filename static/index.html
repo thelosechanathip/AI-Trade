@@ -2007,6 +2007,7 @@ const eqChart = new Chart(eqCtx, {
 
 // ── Connection + WebSocket ─────────────────────────────────────────────────────
 let ws, retryDelay = 2000;
+let statePollTimer = null;
 
 function setConn(live) {
   const dot  = $('conn-dot');
@@ -2023,12 +2024,35 @@ function setConn(live) {
   }
 }
 
+async function loadStateSnapshot() {
+  try {
+    const resp = await fetch('/api/state', { cache: 'no-store' });
+    if (!resp.ok) return false;
+    render(await resp.json());
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function startStatePolling() {
+  if (statePollTimer) return;
+  loadStateSnapshot();
+  statePollTimer = setInterval(loadStateSnapshot, 5000);
+}
+
+function stopStatePolling() {
+  if (!statePollTimer) return;
+  clearInterval(statePollTimer);
+  statePollTimer = null;
+}
+
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws`);
 
-  ws.onopen  = () => { setConn(true); retryDelay = 2000; };
-  ws.onclose = () => { setConn(false); setTimeout(connect, retryDelay); retryDelay = Math.min(retryDelay*2, 30000); };
+  ws.onopen  = () => { setConn(true); retryDelay = 2000; stopStatePolling(); };
+  ws.onclose = () => { setConn(false); startStatePolling(); setTimeout(connect, retryDelay); retryDelay = Math.min(retryDelay*2, 30000); };
   ws.onerror = () => ws.close();
   ws.onmessage = e => { try { render(JSON.parse(e.data)); } catch(_) {} };
 }
@@ -2556,6 +2580,7 @@ function renderActivity(d) {
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
+loadStateSnapshot().then(ok => { if (!ok) startStatePolling(); });
 connect();
 </script>
 </body>

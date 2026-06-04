@@ -125,6 +125,11 @@ def _with_live_today_stats(state: dict) -> dict:
     today_stats = _today_trade_stats()
     today_stats["weekly_pnl"] = old_stats.get("weekly_pnl", state.get("weekly_pnl", 0.0))
     state["stats"] = today_stats
+    state["runtime"] = {
+        "cwd": str(Path.cwd()),
+        "state_path": str(STATE_PATH.resolve()),
+        "state_mtime": STATE_PATH.stat().st_mtime if STATE_PATH.exists() else None,
+    }
     return state
 
 

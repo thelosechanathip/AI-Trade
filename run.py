@@ -16,6 +16,9 @@ import subprocess
 import threading
 import webbrowser
 import time
+import json
+import urllib.error
+import urllib.request
 
 
 def _start_web(port: int) -> None:
@@ -34,6 +37,32 @@ def _start_web(port: int) -> None:
             return
 
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+
+
+def _wait_for_web(port: int, timeout: float = 8.0) -> bool:
+    """Wait until the dashboard API is reachable from this project directory."""
+    deadline = time.time() + timeout
+    expected_cwd = os.path.abspath(os.getcwd())
+    url = f"http://127.0.0.1:{port}/api/state"
+
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=1.0) as resp:
+                payload = json.loads(resp.read().decode("utf-8") or "{}")
+            runtime_cwd = payload.get("runtime", {}).get("cwd")
+            if not runtime_cwd:
+                print(f"\n  ERROR: Port {port} is serving an old dashboard backend.")
+                print("         Stop that process, then run python run.py again.")
+                return False
+            if os.path.abspath(runtime_cwd) != expected_cwd:
+                print(f"\n  ERROR: Port {port} is serving another AI-Trade folder:")
+                print(f"         {runtime_cwd}")
+                print(f"         expected: {expected_cwd}")
+                return False
+            return True
+        except (OSError, urllib.error.URLError, json.JSONDecodeError):
+            time.sleep(0.25)
+    return False
 
 
 def _start_nextjs(dashboard_dir: str) -> subprocess.Popen | None:
@@ -85,7 +114,10 @@ def main() -> None:
         name="web-server",
     )
     web_thread.start()
-    time.sleep(1.5)
+    if not _wait_for_web(port):
+        print(f"\nERROR: Dashboard backend did not start on http://localhost:{port}.")
+        print("Close the old process using that port, then run python run.py again.\n")
+        sys.exit(1)
 
     # ── Next.js dashboard (optional) ─────────────────────────────────
     nextjs_proc = None
