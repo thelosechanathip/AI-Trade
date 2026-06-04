@@ -720,6 +720,57 @@
       transition: transform .9s cubic-bezier(.22, 1, .36, 1), filter .3s ease;
       will-change: transform;
     }
+    .agent-token.has-speech::after {
+      content: attr(data-speech);
+      position: absolute;
+      left: 50%;
+      bottom: calc(100% + 8px);
+      max-width: 148px;
+      min-width: 82px;
+      transform: translateX(-50%);
+      padding: 7px 9px;
+      border-radius: 8px;
+      border: 1px solid rgba(139,92,246,.42);
+      background: rgba(3,7,18,.86);
+      color: #eef2ff;
+      font-size: .62rem;
+      font-weight: 800;
+      line-height: 1.2;
+      white-space: normal;
+      box-shadow: 0 12px 24px rgba(0,0,0,.34), 0 0 18px rgba(139,92,246,.18);
+      backdrop-filter: blur(8px);
+      pointer-events: none;
+      animation: speech-pop .35s ease-out both;
+      z-index: 7;
+    }
+    .agent-token.has-speech::before {
+      opacity: .45;
+    }
+    .agent-token.is-resting .sprite-avatar {
+      animation: agent-rest 3.4s ease-in-out infinite;
+      filter: saturate(.88) brightness(.92);
+    }
+    .agent-token.is-talking .sprite-avatar {
+      animation: agent-talk 1.1s ease-in-out infinite;
+      box-shadow:
+        inset 0 0 0 1px rgba(6,182,212,.32),
+        0 10px 22px rgba(0,0,0,.36),
+        0 0 22px rgba(6,182,212,.24);
+    }
+    .agent-token.is-alerting .sprite-avatar {
+      animation: agent-alert .9s ease-in-out infinite;
+      box-shadow:
+        inset 0 0 0 1px rgba(239,68,68,.38),
+        0 10px 22px rgba(0,0,0,.38),
+        0 0 26px rgba(239,68,68,.34);
+    }
+    .agent-token.is-moving {
+      filter: drop-shadow(0 0 12px rgba(6,182,212,.24));
+    }
+    .agent-token.is-moving .agent-task {
+      border-color: rgba(6,182,212,.5);
+      color: #cffafe;
+    }
     .agent-avatar {
       width: 64px;
       height: 78px;
@@ -859,6 +910,9 @@
     .agent-exec.task-monitor { --move-x: 24px; --move-y: -78px; --beam-rot: -145deg; }
     .agent-director.task-report { --move-x: 0px; --move-y: -86px; --beam-rot: -90deg; }
     .agent-director.task-alert { --move-x: -82px; --move-y: -18px; --beam-rot: -124deg; }
+    .agent-token.task-rest .agent-task { color: #d1d5db; border-color: rgba(148,163,184,.28); }
+    .agent-token.task-talk .agent-task,
+    .agent-token.task-huddle .agent-task { color: #bae6fd; border-color: rgba(6,182,212,.42); }
     .office-readout {
       position: absolute;
       left: 18px;
@@ -953,6 +1007,23 @@
     @keyframes agent-walk {
       0%,100% { transform: translateY(0) rotate(-1deg); }
       50% { transform: translateY(-7px) rotate(1deg); }
+    }
+    @keyframes agent-rest {
+      0%,100% { transform: translateY(1px) scale(.98); }
+      50% { transform: translateY(3px) scale(.965); }
+    }
+    @keyframes agent-talk {
+      0%,100% { transform: translateY(0) rotate(0deg); }
+      30% { transform: translateY(-3px) rotate(-1deg); }
+      65% { transform: translateY(-2px) rotate(1deg); }
+    }
+    @keyframes agent-alert {
+      0%,100% { transform: translateY(0) scale(1); }
+      50% { transform: translateY(-4px) scale(1.04); }
+    }
+    @keyframes speech-pop {
+      from { opacity: 0; transform: translateX(-50%) translateY(6px) scale(.96); }
+      to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
     }
     @keyframes data-beam {
       0%,100% { opacity: .25; width: 52px; }
@@ -1614,25 +1685,177 @@ function agentThaiName(name) {
   return map[String(name || '').toLowerCase()] || name || 'ทีมงาน';
 }
 
-function setAgentTask(role, task, label, active = true) {
+const TEAM_WAYPOINTS = {
+  strategy: {
+    scan: { x: 42, y: -120, beam: -18 },
+    chart: { x: 58, y: -150, beam: -22 },
+    signal: { x: 128, y: -104, beam: -12 },
+    talk: { x: 174, y: -34, beam: -32 },
+    huddle: { x: 188, y: -56, beam: -44 },
+    rest: { x: 10, y: 16, beam: -18 },
+    idle: { x: 0, y: 0, beam: -18 },
+  },
+  ai: {
+    analyze: { x: 154, y: -118, beam: -32 },
+    learn: { x: 206, y: -54, beam: -8 },
+    talk: { x: 78, y: -46, beam: -22 },
+    huddle: { x: 88, y: -104, beam: -38 },
+    rest: { x: -46, y: 14, beam: -18 },
+    idle: { x: 0, y: 0, beam: -18 },
+  },
+  risk: {
+    risk: { x: -74, y: -114, beam: -154 },
+    guard: { x: -36, y: -42, beam: -150 },
+    patrol: { x: -126, y: -82, beam: -144 },
+    talk: { x: -180, y: -34, beam: -152 },
+    huddle: { x: -174, y: -58, beam: -142 },
+    rest: { x: -8, y: 16, beam: -150 },
+    idle: { x: 0, y: 0, beam: -150 },
+  },
+  exec: {
+    execute: { x: 58, y: -92, beam: -132 },
+    monitor: { x: 24, y: -78, beam: -145 },
+    talk: { x: -118, y: -46, beam: -136 },
+    huddle: { x: -90, y: -104, beam: -126 },
+    rest: { x: 30, y: 14, beam: -145 },
+    idle: { x: 0, y: 0, beam: -145 },
+  },
+  director: {
+    report: { x: 0, y: -86, beam: -90 },
+    alert: { x: -82, y: -18, beam: -124 },
+    talk: { x: -112, y: -12, beam: -112 },
+    huddle: { x: 0, y: -46, beam: -90 },
+    rest: { x: 84, y: 18, beam: -64 },
+    idle: { x: 0, y: 0, beam: -90 },
+  },
+};
+
+const TEAM_ROUTINES = {
+  strategy: ['scan', 'chart', 'talk', 'scan', 'rest', 'huddle'],
+  ai: ['analyze', 'learn', 'talk', 'analyze', 'rest', 'huddle'],
+  risk: ['guard', 'patrol', 'talk', 'risk', 'rest', 'huddle'],
+  exec: ['idle', 'monitor', 'talk', 'execute', 'rest', 'huddle'],
+  director: ['report', 'talk', 'huddle', 'report', 'rest', 'alert'],
+};
+
+const TEAM_TASK_LABELS = {
+  scan: 'สแกนกราฟ',
+  chart: 'ดูผนังราคา',
+  signal: 'จับสัญญาณ',
+  analyze: 'วิเคราะห์',
+  learn: 'เรียนรู้',
+  risk: 'กันความเสี่ยง',
+  guard: 'เฝ้าพอร์ต',
+  patrol: 'เดินตรวจ',
+  execute: 'เตรียมส่ง',
+  monitor: 'ดูไม้เปิด',
+  report: 'สรุปทีม',
+  alert: 'เตือนทีม',
+  talk: 'คุยงาน',
+  huddle: 'ประชุม',
+  rest: 'พักสั้น ๆ',
+  idle: 'รอคำสั่ง',
+};
+
+const TEAM_OFFSETS = { strategy: 0, ai: 1, risk: 2, exec: 3, director: 4 };
+
+function setAgentTask(role, task, label, active = true, speech = '') {
   const el = $(`team-${role}`);
   if (!el) return;
   const nextTask = task || 'idle';
   const prevTask = el.dataset.task || '';
+  const waypoint = (TEAM_WAYPOINTS[role] && TEAM_WAYPOINTS[role][nextTask]) || TEAM_WAYPOINTS[role]?.idle || {};
   for (const cls of Array.from(el.classList)) {
     if (cls.startsWith('task-')) el.classList.remove(cls);
   }
+  el.style.setProperty('--move-x', `${Number(waypoint.x || 0)}px`);
+  el.style.setProperty('--move-y', `${Number(waypoint.y || 0)}px`);
+  el.style.setProperty('--beam-rot', `${Number(waypoint.beam || -18)}deg`);
   el.classList.add(`task-${nextTask}`);
-  el.classList.toggle('is-working', !!active);
-  el.classList.toggle('is-idle', !active);
+  el.classList.toggle('is-working', !!active && !['rest', 'talk', 'huddle'].includes(nextTask));
+  el.classList.toggle('is-idle', !active && nextTask !== 'rest');
+  el.classList.toggle('is-resting', nextTask === 'rest');
+  el.classList.toggle('is-talking', nextTask === 'talk' || nextTask === 'huddle');
+  el.classList.toggle('is-alerting', nextTask === 'alert' || nextTask === 'risk');
+  el.classList.toggle('has-speech', !!speech);
+  if (speech) el.dataset.speech = speech;
+  else delete el.dataset.speech;
   if (prevTask !== nextTask) {
     el.classList.add('is-moving');
     clearTimeout(el._moveTimer);
-    el._moveTimer = setTimeout(() => el.classList.remove('is-moving'), 950);
+    el._moveTimer = setTimeout(() => el.classList.remove('is-moving'), 1100);
   }
   el.dataset.task = nextTask;
   const bubble = $(`task-${role}`);
   if (bubble) bubble.textContent = label || 'รอข้อมูล';
+}
+
+function chooseRoutineTask(role, preferred, ctx) {
+  const phase = ctx.phase + (TEAM_OFFSETS[role] || 0);
+  if (ctx.hasCritical) {
+    if (role === 'director') return 'alert';
+    if (role === 'risk') return 'risk';
+    if (role === 'exec') return ctx.openTrades.length ? 'monitor' : 'idle';
+    return phase % 2 ? 'talk' : preferred;
+  }
+  if (ctx.openTrades.length && role === 'exec') return phase % 4 === 1 ? 'talk' : 'monitor';
+  if (ctx.hasDirectionalSignal && role === 'strategy') return phase % 3 === 1 ? 'chart' : 'signal';
+  if (ctx.hasDirectionalSignal && role === 'exec') return phase % 4 === 2 ? 'huddle' : 'execute';
+  if (ctx.hasLearningItems && role === 'ai') return phase % 3 === 0 ? 'talk' : 'learn';
+  if ((ctx.riskLock !== 'OK' || ctx.dd >= 3 || ctx.spread >= 8) && role === 'risk') {
+    return phase % 3 === 0 ? 'patrol' : 'risk';
+  }
+  if (phase % 6 === 4) return 'rest';
+  if (phase % 6 === 2) return role === 'director' ? 'huddle' : 'talk';
+  const route = TEAM_ROUTINES[role] || [preferred || 'idle'];
+  return route[phase % route.length] || preferred || 'idle';
+}
+
+function labelForAgentTask(role, task, ctx) {
+  if (role === 'strategy' && task === 'signal') return `แผน ${thaiSignal(ctx.signal)}`;
+  if (role === 'ai' && task === 'analyze') return ctx.conf >= 60 ? 'คำนวณ' : 'อ่านข้อมูล';
+  if (role === 'risk' && task === 'risk') {
+    return ctx.riskLock !== 'OK' ? 'ล็อกเสี่ยง' : (ctx.dd >= 3 ? 'คุม DD' : 'กันเสี่ยง');
+  }
+  if (role === 'exec' && task === 'execute') return 'เตรียมส่ง';
+  if (role === 'exec' && task === 'monitor') return 'เฝ้าไม้';
+  if (role === 'director' && task === 'alert') return 'ป้องกัน';
+  return TEAM_TASK_LABELS[task] || TEAM_TASK_LABELS.idle;
+}
+
+function speechForAgent(role, task, ctx) {
+  if (ctx.hasCritical) {
+    if (role === 'director') return 'ทุกคนตั้งการ์ดก่อน';
+    if (role === 'risk') return 'ความเสี่ยงยังสูง';
+  }
+  if (task === 'talk' || task === 'huddle') {
+    if (role === 'strategy') return ctx.hasDirectionalSignal ? `จังหวะ ${thaiSignal(ctx.signal)} มาแล้ว` : 'ยังรอแท่งที่ชัด';
+    if (role === 'ai') return `AI กลาง ${ctx.conf}% ขอเช็กซ้ำ`;
+    if (role === 'risk') return ctx.riskLock !== 'OK' ? `ยังติด ${thaiRiskLock(ctx.riskLock)}` : `DD ${ctx.dd.toFixed(1)}% เฝ้าอยู่`;
+    if (role === 'exec') return ctx.openTrades.length ? 'ผมเฝ้าไม้เปิดอยู่' : 'ผ่านครบค่อยส่ง';
+    if (role === 'director') return 'สรุปทีม แล้วรอกรรมการ';
+  }
+  if (task === 'rest') return 'พักสั้น ๆ แล้วกลับงาน';
+  if (task === 'execute' && ctx.hasDirectionalSignal) return 'เตรียมคิวส่งคำสั่ง';
+  if (task === 'learn') return 'จำแพทเทิร์นแพ้ไว้';
+  return '';
+}
+
+function applyAgentRoutine(ctx) {
+  const preferred = {
+    strategy: ctx.hasDirectionalSignal ? 'signal' : 'scan',
+    ai: ctx.hasLearningItems ? 'learn' : 'analyze',
+    risk: ctx.riskLock !== 'OK' || ctx.dd >= 3 || ctx.spread >= 8 ? 'risk' : 'guard',
+    exec: ctx.openTrades.length ? 'monitor' : (ctx.hasDirectionalSignal && ctx.riskLock === 'OK' ? 'execute' : 'idle'),
+    director: ctx.hasCritical ? 'alert' : 'report',
+  };
+  for (const role of ['strategy', 'ai', 'risk', 'exec', 'director']) {
+    const task = chooseRoutineTask(role, preferred[role], ctx);
+    const active = !['idle', 'rest'].includes(task) || role === 'director';
+    setAgentTask(role, task, labelForAgentTask(role, task, ctx), active, speechForAgent(role, task, ctx));
+  }
+  const room = $('office-room');
+  if (room) room.classList.toggle('mode-alert', ctx.hasCritical || ctx.riskLock !== 'OK' || ctx.dd >= 5);
 }
 
 function updateAgentChoreography(d, sd, incidents) {
@@ -1647,47 +1870,11 @@ function updateAgentChoreography(d, sd, incidents) {
   const hasLearningItems = (journal.recent_failures || []).length > 0 || (journal.weak_regimes || []).length > 0;
   const hasCritical = incidents.some(item => item.level === 'critical');
   const hasWarning = incidents.some(item => item.level === 'warn');
-
-  setAgentTask(
-    'strategy',
-    hasDirectionalSignal ? 'signal' : 'scan',
-    hasDirectionalSignal ? `แผน ${thaiSignal(signal)}` : 'สแกน',
-    true
-  );
-
-  setAgentTask(
-    'ai',
-    hasLearningItems ? 'learn' : 'analyze',
-    hasLearningItems ? 'เรียนรู้' : (conf >= 60 ? 'คำนวณ' : 'อ่านข้อมูล'),
-    true
-  );
-
-  setAgentTask(
-    'risk',
-    riskLock !== 'OK' || dd >= 3 || spread >= 8 ? 'risk' : 'guard',
-    riskLock !== 'OK' ? 'ล็อกเสี่ยง' : (dd >= 3 ? 'คุม DD' : 'เฝ้าเสี่ยง'),
-    true
-  );
-
-  const execActive = openTrades.length > 0 || (hasDirectionalSignal && riskLock === 'OK');
-  setAgentTask(
-    'exec',
-    openTrades.length ? 'monitor' : (execActive ? 'execute' : 'idle'),
-    openTrades.length ? 'เฝ้าไม้' : (execActive ? 'เตรียมยิง' : 'รอคำสั่ง'),
-    execActive
-  );
-
-  setAgentTask(
-    'director',
-    hasCritical ? 'alert' : 'report',
-    hasCritical ? 'ป้องกัน' : (hasWarning ? 'ประชุม' : 'สรุปทีม'),
-    true
-  );
-
-  const room = $('office-room');
-  if (room) {
-    room.classList.toggle('mode-alert', hasCritical || riskLock !== 'OK' || dd >= 5);
-  }
+  applyAgentRoutine({
+    d, sd, signal, hasDirectionalSignal, conf, spread, riskLock, dd,
+    openTrades, hasLearningItems, hasCritical, hasWarning,
+    phase: Math.floor(Date.now() / 4200),
+  });
 }
 
 function setBar(id, frac, color) {
