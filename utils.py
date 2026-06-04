@@ -448,7 +448,7 @@ def get_trade_stats() -> dict:
     gross_profit  = sum(wins)
     gross_loss    = abs(sum(losses))
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else (
-        float('inf') if gross_profit > 0 else 0.0
+        999.0 if gross_profit > 0 else 0.0
     )
 
     return {
@@ -472,7 +472,7 @@ def _performance_from_profits(
     gross_profit = sum(wins)
     gross_loss = abs(sum(losses))
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else (
-        float('inf') if gross_profit > 0 else 0.0
+        999.0 if gross_profit > 0 else 0.0
     )
     return {
         'total_trades': total,
@@ -591,7 +591,7 @@ def get_context_performance(
     win_rate    = len(wins_list) / total
     gp          = sum(wins_list)
     gl          = abs(sum(losses_list)) if losses_list else 0.0
-    pf          = gp / gl if gl > 0 else (float('inf') if gp > 0 else 0.0)
+    pf          = gp / gl if gl > 0 else (999.0 if gp > 0 else 0.0)
 
     return {
         'total':        total,

@@ -18,6 +18,7 @@ CORS is open so the Next.js dev server (port 3000) can connect.
 
 import asyncio
 import json
+import math
 import sqlite3
 from pathlib import Path
 
@@ -48,6 +49,23 @@ BRAIN_DB_PATH  = Path("data/brain_memory.db")
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+def _json_safe(value):
+    """Recursively remove NaN/Infinity values before strict JSON responses."""
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return value
+
+
+def _json_response(value):
+    return JSONResponse(_json_safe(value))
+
+
 def _read_state() -> dict:
     if not STATE_PATH.exists():
         return _with_live_today_stats({})
@@ -70,7 +88,7 @@ def _perf_from_profits(
     gross_profit = sum(wins)
     gross_loss = abs(sum(losses))
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else (
-        float("inf") if gross_profit > 0 else 0.0
+        999.0 if gross_profit > 0 else 0.0
     )
     return {
         "total_trades": total,
@@ -311,7 +329,7 @@ def _build_broadcast() -> dict:
     state['ai_insights']    = _read_json(INSIGHTS_PATH)
     state['learning_stats'] = _read_json(LEARN_PATH)
     state['learning_journal'] = _build_learning_journal()
-    return state
+    return _json_safe(state)
 
 
 # ── WebSocket connection manager ───────────────────────────────────────────────
@@ -332,7 +350,7 @@ class _WSManager:
         dead = []
         for ws in self._clients:
             try:
-                await ws.send_json(payload)
+                await ws.send_json(_json_safe(payload))
             except Exception:
                 dead.append(ws)
         for ws in dead:
@@ -348,7 +366,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             payload = _build_broadcast()
-            await websocket.send_json(payload)
+            await websocket.send_json(_json_safe(payload))
             await asyncio.sleep(1)
     except WebSocketDisconnect:
         manager.disconnect(websocket)
@@ -360,7 +378,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/api/state")
 def api_state():
-    return JSONResponse(_read_state())
+    return _json_response(_read_state())
 
 
 @app.get("/api/equity")
@@ -369,24 +387,24 @@ def api_equity():
         "SELECT ts, balance, equity FROM equity_curve ORDER BY ts DESC LIMIT 600"
     )
     rows.reverse()
-    return JSONResponse(rows)
+    return _json_response(rows)
 
 
 @app.get("/api/trades")
 def api_trades():
     """Return only OPEN trades (status='open' or close_time IS NULL)"""
-    return JSONResponse(_query(_trade_select_sql(limit=100, history=False)))
+    return _json_response(_query(_trade_select_sql(limit=100, history=False)))
 
 
 @app.get("/api/trades/history")
 def api_trades_history():
     """Return ALL trades (open + closed) for historical analysis"""
-    return JSONResponse(_query(_trade_select_sql(limit=200, history=True)))
+    return _json_response(_query(_trade_select_sql(limit=200, history=True)))
 
 
 @app.get("/api/activity")
 def api_activity():
-    return JSONResponse(_query(
+    return _json_response(_query(
         "SELECT ts, symbol, message, type FROM activity_log "
         "WHERE LENGTH(ts) > 8 ORDER BY id DESC LIMIT 30"
     ))
@@ -394,7 +412,7 @@ def api_activity():
 
 @app.get("/api/activity/{symbol}")
 def api_activity_symbol(symbol: str):
-    return JSONResponse(_query(
+    return _json_response(_query(
         "SELECT ts, symbol, message, type FROM activity_log "
         "WHERE symbol=? AND LENGTH(ts) > 8 ORDER BY id DESC LIMIT 15",
         (symbol.upper(),),
@@ -404,19 +422,19 @@ def api_activity_symbol(symbol: str):
 @app.get("/api/ai_insights")
 def api_ai_insights():
     """AI prediction breakdown: tabular, regime, LSTM, online, RL, memory."""
-    return JSONResponse(_read_json(INSIGHTS_PATH))
+    return _json_response(_read_json(INSIGHTS_PATH))
 
 
 @app.get("/api/learning_stats")
 def api_learning_stats():
     """Learning progress: RL agent, market memory, online model stats."""
-    return JSONResponse(_read_json(LEARN_PATH))
+    return _json_response(_read_json(LEARN_PATH))
 
 
 @app.get("/api/learning_journal")
 def api_learning_journal():
     """Readable post-loss memory and strategy-adjustment notes."""
-    return JSONResponse(_build_learning_journal())
+    return _json_response(_build_learning_journal())
 
 
 # ── Legacy HTML dashboard (static) ────────────────────────────────────────────
