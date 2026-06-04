@@ -148,6 +148,7 @@ class TradingEngine:
         self._ticket_direction: dict   = {}            # ticket -> 'BUY'|'SELL'
         self._ticket_confidence: dict  = {}            # ticket -> ai_confidence int
         self._ticket_brain: dict       = {}            # ticket -> BrainDecision
+        self._ticket_committee: dict   = {}            # ticket -> CommitteeVerdict
         self._ticket_entry_bar: dict   = {}            # ticket -> bar count at entry
         # direction_ban: symbol -> {'direction': 'BUY'|'SELL', 'until': float}
         self._direction_ban: dict = {}
@@ -1294,6 +1295,7 @@ class TradingEngine:
             self._ticket_direction[result['ticket']]  = signal
             self._ticket_confidence[result['ticket']] = ai_confidence
             self._ticket_brain[result['ticket']]      = brain_decision
+            self._ticket_committee[result['ticket']]  = committee
             self._ticket_entry_bar[result['ticket']]  = len(df)
             # Store entry features for trade-outcome feedback learning
             self.ai.record_trade_entry(result['ticket'], df, signal)
@@ -1538,6 +1540,7 @@ class TradingEngine:
                     self.logger.debug(f"Brain memory post-trade update failed: {exc}")
                 self._ticket_confidence.pop(ticket, None)
                 self._ticket_brain.pop(ticket, None)
+                self._ticket_committee.pop(ticket, None)
                 self._known_tickets.discard(ticket)
 
     # ── Dashboard state update ────────────────────────────────────────────────
@@ -1621,6 +1624,18 @@ class TradingEngine:
                 'brain_regime': (
                     self._ticket_brain[p.ticket].market_regime
                     if p.ticket in self._ticket_brain else ''
+                ),
+                'committee_verdict': (
+                    self._ticket_committee[p.ticket].verdict
+                    if p.ticket in self._ticket_committee else ''
+                ),
+                'committee_score': (
+                    round(self._ticket_committee[p.ticket].score, 3)
+                    if p.ticket in self._ticket_committee else 0.0
+                ),
+                'committee_risk_multiplier': (
+                    round(self._ticket_committee[p.ticket].risk_multiplier, 3)
+                    if p.ticket in self._ticket_committee else 1.0
                 ),
             })
 

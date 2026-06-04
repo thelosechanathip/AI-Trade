@@ -47,3 +47,7 @@ dashboard/.env.local
 
 # ── Claude tooling ───────────────────────────────────────────
 .claude/
+
+# Temporary screenshots / browser profiles
+tmp_*.png
+tmp_*/

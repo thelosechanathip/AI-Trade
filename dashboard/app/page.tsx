@@ -43,12 +43,18 @@ interface Position {
   ticket: number;
   symbol: string;
   direction: string;
-  lot: number;
-  open_price: number;
+  lot?: number;
+  lot_size?: number;
+  open_price?: number;
+  entry_price?: number;
   current_price: number;
-  sl: number;
-  tp: number;
+  sl?: number;
+  sl_price?: number;
+  tp?: number;
+  tp_price?: number;
   profit: number;
+  committee_verdict?: string;
+  committee_score?: number;
 }
 
 interface ActivityEntry {
@@ -92,7 +98,8 @@ interface TradeState {
   margin: number;
   free_margin: number;
   terminal: Record<string, SymbolTerminal>;
-  open_positions: Position[];
+  open_positions?: Position[];
+  open_trades?: Position[];
   drawdown_pct: number;
   daily_pnl: number;
   daily_start_balance: number;
@@ -582,8 +589,8 @@ function OpenPositions({ positions }: { positions: Position[] }) {
                   }`}>
                     {p.direction}
                   </td>
-                  <td className="py-1.5 text-right text-gray-300">{p.lot.toFixed(2)}</td>
-                  <td className="py-1.5 text-right text-gray-400">{p.open_price.toFixed(2)}</td>
+                  <td className="py-1.5 text-right text-gray-300">{(p.lot ?? p.lot_size ?? 0).toFixed(2)}</td>
+                  <td className="py-1.5 text-right text-gray-400">{(p.open_price ?? p.entry_price ?? 0).toFixed(2)}</td>
                   <td className="py-1.5 text-right text-white">{p.current_price.toFixed(2)}</td>
                   <td className={`py-1.5 text-right font-bold ${
                     p.profit >= 0 ? "text-emerald-400" : "text-red-400"
@@ -681,7 +688,7 @@ export default function Dashboard() {
   const { data, connected } = useTradeSocket("ws://localhost:8000/ws");
 
   const terminal   = data?.terminal   ?? {};
-  const positions  = data?.open_positions ?? [];
+  const positions  = data?.open_positions ?? data?.open_trades ?? [];
   const activity   = data?.activity   ?? [];
   const stats      = data?.stats;
   const equityData = data?.equity_recent ?? [];

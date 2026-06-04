@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="th">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI-Trade Pro · XAUUSD</title>
+  <title>AI-Trade · ห้องเทรด XAUUSD</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     /* ── Design System (open-design inspired — Linear/Stripe dark) ──────── */
@@ -307,6 +307,529 @@
       font-size: .8rem; font-weight: 700;
     }
 
+    .ops-grid {
+      display: grid;
+      grid-template-columns: 1.05fr 1.1fr 1fr;
+      gap: 12px;
+      align-items: stretch;
+    }
+    @media (max-width: 1200px) { .ops-grid { grid-template-columns: 1fr; } }
+    .mission-top {
+      display: grid;
+      grid-template-columns: 1fr 120px;
+      gap: 12px;
+      align-items: center;
+    }
+    .mission-title {
+      font-size: 1.35rem;
+      line-height: 1.1;
+      font-weight: 800;
+      letter-spacing: .2px;
+    }
+    .mission-sub {
+      margin-top: 6px;
+      color: var(--text-2);
+      font-size: .8rem;
+      line-height: 1.45;
+    }
+    .health-box {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 10px;
+      text-align: center;
+    }
+    .health-score {
+      font-size: 1.4rem;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+    .health-label {
+      color: var(--text-3);
+      font-size: .65rem;
+      text-transform: uppercase;
+      letter-spacing: .7px;
+      margin-top: 2px;
+    }
+    .compact-grid {
+      display: grid;
+      grid-template-columns: repeat(4,1fr);
+      gap: 8px;
+      margin-top: 12px;
+    }
+    @media (max-width: 760px) { .compact-grid { grid-template-columns: repeat(2,1fr); } }
+    .mini-stat {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(255,255,255,.02);
+      padding: 8px 9px;
+      min-width: 0;
+    }
+    .mini-label {
+      color: var(--text-3);
+      font-size: .62rem;
+      text-transform: uppercase;
+      letter-spacing: .7px;
+      white-space: nowrap;
+    }
+    .mini-val {
+      margin-top: 4px;
+      font-weight: 700;
+      font-size: .82rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .decision-trace {
+      display: grid;
+      grid-template-columns: repeat(6,1fr);
+      gap: 6px;
+      margin-top: 12px;
+    }
+    @media (max-width: 760px) { .decision-trace { grid-template-columns: repeat(2,1fr); } }
+    .trace-step {
+      min-height: 58px;
+      padding: 8px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .trace-k {
+      color: var(--text-3);
+      font-size: .58rem;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+    }
+    .trace-v {
+      margin-top: 5px;
+      font-size: .76rem;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+    .agent-grid {
+      display: grid;
+      grid-template-columns: repeat(2,1fr);
+      gap: 8px;
+    }
+    @media (max-width: 560px) { .agent-grid { grid-template-columns: 1fr; } }
+    .agent-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 10px;
+      min-height: 94px;
+    }
+    .agent-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .agent-name {
+      font-size: .72rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .7px;
+    }
+    .agent-score {
+      font-size: .7rem;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+    .agent-meta {
+      color: var(--text-2);
+      font-size: .72rem;
+      line-height: 1.38;
+      min-height: 30px;
+    }
+    .agent-card.approve { border-color: rgba(34,197,94,.35); }
+    .agent-card.caution { border-color: rgba(245,158,11,.45); }
+    .agent-card.veto { border-color: rgba(239,68,68,.45); }
+    .agent-card.standby { border-color: var(--border); opacity: .86; }
+    .incident-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 244px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+    .incident-item {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 10px;
+    }
+    .incident-item.critical { border-color: rgba(239,68,68,.45); }
+    .incident-item.warn { border-color: rgba(245,158,11,.45); }
+    .incident-item.ok { border-color: rgba(34,197,94,.35); }
+    .incident-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .incident-title {
+      font-size: .8rem;
+      font-weight: 800;
+    }
+    .incident-tag {
+      font-size: .62rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: var(--border);
+      color: var(--text-2);
+      white-space: nowrap;
+    }
+    .incident-action {
+      color: var(--text-2);
+      font-size: .74rem;
+      line-height: 1.4;
+    }
+
+    /* ── Thai trading office ─────────────────────────────────────────────── */
+    .office-shell {
+      display: grid;
+      grid-template-columns: minmax(420px, 1.45fr) minmax(330px, .95fr) minmax(320px, .9fr);
+      gap: 12px;
+      align-items: stretch;
+    }
+    @media (max-width: 1280px) { .office-shell { grid-template-columns: 1fr; } }
+    .office-stage {
+      padding: 0;
+      overflow: hidden;
+      min-height: 420px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      background:
+        radial-gradient(circle at 16% 12%, rgba(6,182,212,.16), transparent 26%),
+        radial-gradient(circle at 86% 18%, rgba(245,158,11,.12), transparent 24%),
+        linear-gradient(145deg, rgba(17,24,39,.95), rgba(11,18,32,.98));
+    }
+    .office-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      background: rgba(0,0,0,.18);
+    }
+    .office-title {
+      font-size: .82rem;
+      color: var(--text-2);
+      text-transform: uppercase;
+      letter-spacing: .8px;
+      font-weight: 700;
+    }
+    .office-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,.12);
+      color: var(--text-2);
+      font-size: .72rem;
+      white-space: nowrap;
+    }
+    .office-room {
+      position: relative;
+      min-height: 360px;
+      padding: 18px;
+      background:
+        radial-gradient(circle at 50% 100%, rgba(139,92,246,.26), transparent 36%),
+        linear-gradient(180deg, rgba(3,7,18,.08), rgba(3,7,18,.76)),
+        url('assets/ai-command-center-bg.png') center / cover no-repeat;
+    }
+    .office-room::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, rgba(3,7,18,.46), transparent 20%, transparent 80%, rgba(3,7,18,.46)),
+        linear-gradient(180deg, transparent 50%, rgba(3,7,18,.34));
+      z-index: 0;
+    }
+    .chart-wall {
+      position: absolute;
+      left: 18px;
+      top: 18px;
+      right: 18px;
+      height: 118px;
+      border: 1px solid rgba(77,166,255,.28);
+      border-radius: 8px;
+      background:
+        linear-gradient(180deg, rgba(77,166,255,.13), rgba(34,197,94,.06)),
+        rgba(0,0,0,.24);
+      overflow: hidden;
+    }
+    .chart-wall::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(transparent 24%, rgba(255,255,255,.05) 25%, transparent 26%),
+        linear-gradient(90deg, transparent 24%, rgba(255,255,255,.04) 25%, transparent 26%);
+      background-size: 60px 28px;
+    }
+    .chart-line {
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      top: 44px;
+      height: 3px;
+      background: linear-gradient(90deg, var(--red), var(--amber), var(--green), var(--cyan));
+      transform: skewY(-5deg);
+      box-shadow: 0 0 18px rgba(34,197,94,.35);
+    }
+    .chart-bars {
+      position: absolute;
+      left: 24px;
+      right: 24px;
+      bottom: 16px;
+      display: flex;
+      align-items: end;
+      gap: 8px;
+      height: 52px;
+    }
+    .chart-bars span {
+      flex: 1;
+      border-radius: 3px 3px 0 0;
+      background: rgba(6,182,212,.55);
+      min-height: 10px;
+    }
+    .war-table {
+      position: absolute;
+      left: 50%;
+      top: 168px;
+      width: 220px;
+      height: 124px;
+      transform: translateX(-50%);
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.16);
+      background:
+        linear-gradient(145deg, rgba(31,41,55,.9), rgba(9,9,11,.9)),
+        repeating-linear-gradient(90deg, transparent 0 18px, rgba(255,255,255,.03) 18px 20px);
+      box-shadow: 0 24px 48px rgba(0,0,0,.36);
+    }
+    .war-table::after {
+      content: '';
+      position: absolute;
+      inset: 16px 20px;
+      border-radius: 8px;
+      background:
+        linear-gradient(90deg, rgba(34,197,94,.35), rgba(6,182,212,.5)),
+        rgba(0,0,0,.28);
+      opacity: .75;
+    }
+    .desk {
+      position: absolute;
+      width: 132px;
+      height: 74px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: linear-gradient(145deg, #2a1c14, #15110f);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 18px 28px rgba(0,0,0,.25);
+    }
+    .desk::before {
+      content: '';
+      position: absolute;
+      left: 16px;
+      right: 16px;
+      top: 10px;
+      height: 28px;
+      border-radius: 5px;
+      background: linear-gradient(90deg, rgba(59,130,246,.8), rgba(6,182,212,.65));
+    }
+    .desk-a { left: 36px; top: 164px; }
+    .desk-b { right: 42px; top: 164px; }
+    .desk-c { left: 86px; bottom: 28px; }
+    .desk-d { right: 92px; bottom: 28px; }
+    .office-room .chart-wall,
+    .office-room .desk,
+    .office-room .war-table {
+      display: none;
+    }
+    .agent-token {
+      position: absolute;
+      width: 112px;
+      text-align: center;
+      color: var(--text);
+      z-index: 2;
+    }
+    .agent-avatar {
+      width: 64px;
+      height: 78px;
+      margin: 0 auto 5px;
+      border-radius: 14px;
+      display: grid;
+      place-items: end;
+      font-weight: 900;
+      border: 1px solid rgba(255,255,255,.18);
+      background: linear-gradient(145deg, rgba(6,182,212,.8), rgba(34,197,94,.55));
+      box-shadow: 0 10px 22px rgba(0,0,0,.34);
+      overflow: hidden;
+      position: relative;
+    }
+    .agent-avatar.sprite-avatar {
+      background-image: url('assets/ai-trade-team-model.png');
+      background-repeat: no-repeat;
+      background-size: 1024px 683px;
+      background-position: var(--sprite-x) var(--sprite-y);
+      background-color: rgba(17,24,39,.96);
+      box-shadow:
+        inset 0 0 0 1px rgba(139,92,246,.22),
+        0 10px 22px rgba(0,0,0,.34),
+        0 0 18px rgba(139,92,246,.18);
+    }
+    .agent-avatar.sprite-avatar span {
+      position: absolute;
+      right: 4px;
+      bottom: 4px;
+      min-width: 22px;
+      padding: 2px 4px;
+      border-radius: 5px;
+      background: rgba(17,24,39,.82);
+      border: 1px solid rgba(139,92,246,.42);
+      color: #ede9fe;
+      font-size: .56rem;
+      line-height: 1;
+      letter-spacing: .4px;
+      text-shadow: 0 1px 2px rgba(0,0,0,.7);
+    }
+    .sprite-jame { --sprite-x: -34px; --sprite-y: -100px; }
+    .sprite-nova { --sprite-x: -232px; --sprite-y: -104px; }
+    .sprite-risk { --sprite-x: -420px; --sprite-y: -104px; }
+    .sprite-dex { --sprite-x: -230px; --sprite-y: -390px; }
+    .sprite-vector { --sprite-x: -820px; --sprite-y: -104px; }
+    .agent-token.risk .agent-avatar { background: linear-gradient(145deg, rgba(239,68,68,.85), rgba(245,158,11,.6)); }
+    .agent-token.ai .agent-avatar { background: linear-gradient(145deg, rgba(168,85,247,.8), rgba(59,130,246,.65)); }
+    .agent-token.exec .agent-avatar { background: linear-gradient(145deg, rgba(245,158,11,.82), rgba(34,197,94,.6)); }
+    .agent-token.risk .agent-avatar.sprite-avatar,
+    .agent-token.ai .agent-avatar.sprite-avatar,
+    .agent-token.exec .agent-avatar.sprite-avatar {
+      background-image: url('assets/ai-trade-team-model.png');
+      background-repeat: no-repeat;
+      background-size: 1024px 683px;
+      background-position: var(--sprite-x) var(--sprite-y);
+      background-color: rgba(17,24,39,.96);
+    }
+    .agent-label {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      max-width: 96px;
+      padding: 3px 7px;
+      border-radius: 5px;
+      background: rgba(0,0,0,.55);
+      border: 1px solid rgba(255,255,255,.10);
+      font-size: .68rem;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .agent-sub {
+      margin-top: 3px;
+      color: var(--text-2);
+      font-size: .64rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .agent-strategy { left: 36px; top: 228px; }
+    .agent-risk { right: 52px; top: 228px; }
+    .agent-ai { left: 162px; bottom: 72px; }
+    .agent-exec { right: 172px; bottom: 72px; }
+    .agent-director { left: calc(50% - 56px); top: 286px; }
+    .office-readout {
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      bottom: 12px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      z-index: 3;
+    }
+    .readout-cell {
+      min-width: 0;
+      padding: 8px 9px;
+      border: 1px solid rgba(255,255,255,.10);
+      border-radius: 8px;
+      background: rgba(0,0,0,.32);
+    }
+    .readout-k {
+      color: var(--text-3);
+      font-size: .62rem;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+    }
+    .readout-v {
+      margin-top: 3px;
+      font-size: .78rem;
+      font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .mission-panel .card-title,
+    .journal-panel .card-title { color: #cbd5e1; }
+    .thai-hint {
+      color: var(--text-2);
+      font-size: .77rem;
+      line-height: 1.48;
+    }
+    .journal-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 248px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+    .journal-item {
+      border: 1px solid rgba(255,255,255,.10);
+      border-radius: 8px;
+      background: rgba(255,255,255,.025);
+      padding: 10px;
+    }
+    .journal-item strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: .8rem;
+    }
+    .journal-item p {
+      color: var(--text-2);
+      font-size: .74rem;
+      line-height: 1.42;
+    }
+    .journal-foot {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+      margin-top: 10px;
+    }
+    @media (max-width: 720px) {
+      .office-stage { min-height: 560px; }
+      .office-room { min-height: 500px; }
+      .chart-wall { height: 102px; }
+      .war-table { top: 150px; }
+      .desk-a, .desk-b, .desk-c, .desk-d { display: none; }
+      .agent-strategy { left: 18px; top: 236px; }
+      .agent-risk { right: 18px; top: 236px; }
+      .agent-ai { left: 22px; bottom: 132px; }
+      .agent-exec { right: 22px; bottom: 132px; }
+      .agent-director { top: 326px; }
+      .office-readout { grid-template-columns: repeat(2, 1fr); }
+      .journal-foot { grid-template-columns: 1fr; }
+    }
+
     /* ── Learning progress bar ───────────────────────────────────────────── */
     .lp-label {
       display: flex; justify-content: space-between;
@@ -331,17 +854,17 @@
 <!-- ── Header ──────────────────────────────────────────────────────────────── -->
 <header>
   <div class="logo">
-    <div class="logo-icon">G</div>
+    <div class="logo-icon">AI</div>
     <span class="logo-text">AI-Trade</span>
-    <span class="logo-sub">XAUUSD Pro</span>
+    <span class="logo-sub">ห้องเทรด XAUUSD</span>
   </div>
 
   <div class="header-center">
     <div class="chip" id="conn-chip">
       <span class="dot" id="conn-dot"></span>
-      <span id="conn-label">Connecting…</span>
+      <span id="conn-label">กำลังเชื่อมต่อ...</span>
     </div>
-    <div id="regime-badge" class="chip">— REGIME</div>
+    <div id="regime-badge" class="chip">— สภาพตลาด</div>
   </div>
 
   <div class="header-right">
@@ -355,35 +878,173 @@
   <!-- KPI Row -->
   <div class="row grid-6">
     <div class="card kpi" style="--kpi-color:var(--blue)">
-      <div class="kpi-label">Balance</div>
+      <div class="kpi-label">เงินคงเหลือ</div>
       <div class="kpi-val" id="k-balance">—</div>
       <div class="kpi-sub" id="k-balance-sub">—</div>
     </div>
     <div class="card kpi" style="--kpi-color:var(--green)">
-      <div class="kpi-label">Equity</div>
+      <div class="kpi-label">มูลค่าพอร์ต</div>
       <div class="kpi-val" id="k-equity">—</div>
       <div class="kpi-sub" id="k-equity-sub">—</div>
     </div>
     <div class="card kpi" style="--kpi-color:var(--amber)">
-      <div class="kpi-label">Today P&amp;L</div>
+      <div class="kpi-label">กำไร/ขาดทุนวันนี้</div>
       <div class="kpi-val" id="k-pnl">—</div>
       <div class="kpi-sub" id="k-pnl-sub">—</div>
     </div>
     <div class="card kpi" style="--kpi-color:var(--purple)">
-      <div class="kpi-label">Win Rate</div>
+      <div class="kpi-label">อัตราชนะ</div>
       <div class="kpi-val" id="k-wr">—</div>
       <div class="kpi-sub" id="k-wr-sub">—</div>
     </div>
     <div class="card kpi" style="--kpi-color:var(--cyan)">
-      <div class="kpi-label">Open Trades</div>
+      <div class="kpi-label">ไม้ที่เปิดอยู่</div>
       <div class="kpi-val" id="k-open">0</div>
       <div class="kpi-sub" id="k-open-sub">—</div>
     </div>
     <div class="card kpi" style="--kpi-color:var(--red)">
-      <div class="kpi-label">Drawdown</div>
+      <div class="kpi-label">แรงกดดันพอร์ต</div>
       <div class="kpi-val" id="k-dd">—</div>
       <div class="kpi-sub" id="k-dd-sub">—</div>
     </div>
+  </div>
+
+  <div class="section-label">ห้องเทรด AI</div>
+  <div class="row office-shell">
+    <section class="card office-stage">
+      <div class="office-topbar">
+        <div>
+          <div class="office-title">ทีมงานกำลังสำรวจกราฟ</div>
+          <div class="thai-hint" id="office-thai-summary">กำลังรอข้อมูลจากระบบเทรด</div>
+        </div>
+        <div class="office-chip" id="office-signal">สัญญาณ: รอ</div>
+      </div>
+      <div class="office-room">
+        <div class="chart-wall">
+          <div class="chart-line"></div>
+          <div class="chart-bars">
+            <span style="height:28%"></span><span style="height:56%"></span><span style="height:34%"></span>
+            <span style="height:70%"></span><span style="height:48%"></span><span style="height:82%"></span>
+            <span style="height:62%"></span><span style="height:92%"></span>
+          </div>
+        </div>
+        <div class="desk desk-a"></div>
+        <div class="desk desk-b"></div>
+        <div class="desk desk-c"></div>
+        <div class="desk desk-d"></div>
+        <div class="war-table"></div>
+        <div class="agent-token agent-strategy">
+          <div class="agent-avatar sprite-avatar sprite-jame"><span>ST</span></div>
+          <div class="agent-label">นักกลยุทธ์</div>
+          <div class="agent-sub" id="office-strategy">รอสัญญาณ</div>
+        </div>
+        <div class="agent-token risk agent-risk">
+          <div class="agent-avatar sprite-avatar sprite-risk"><span>RK</span></div>
+          <div class="agent-label">คุมเสี่ยง</div>
+          <div class="agent-sub" id="office-risk">ตรวจความเสี่ยง</div>
+        </div>
+        <div class="agent-token ai agent-ai">
+          <div class="agent-avatar sprite-avatar sprite-nova"><span>AI</span></div>
+          <div class="agent-label">สมอง AI</div>
+          <div class="agent-sub" id="office-ai">อ่านแนวโน้ม</div>
+        </div>
+        <div class="agent-token exec agent-exec">
+          <div class="agent-avatar sprite-avatar sprite-dex"><span>EX</span></div>
+          <div class="agent-label">ส่งคำสั่ง</div>
+          <div class="agent-sub" id="office-exec">รอคำสั่ง</div>
+        </div>
+        <div class="agent-token agent-director">
+          <div class="agent-avatar sprite-avatar sprite-vector"><span>DR</span></div>
+          <div class="agent-label">หัวหน้าทีม</div>
+          <div class="agent-sub" id="office-director">สรุปภาพรวม</div>
+        </div>
+        <div class="office-readout">
+          <div class="readout-cell">
+            <div class="readout-k">ราคา</div>
+            <div class="readout-v" id="office-price">—</div>
+          </div>
+          <div class="readout-cell">
+            <div class="readout-k">สภาพตลาด</div>
+            <div class="readout-v" id="office-regime">—</div>
+          </div>
+          <div class="readout-cell">
+            <div class="readout-k">สเปรด</div>
+            <div class="readout-v" id="office-spread">—</div>
+          </div>
+          <div class="readout-cell">
+            <div class="readout-k">AI มุมมอง</div>
+            <div class="readout-v" id="office-bias">—</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card mission-panel">
+      <div class="card-head">
+        <span class="card-title">สรุปคำตัดสินใจ</span>
+        <span class="card-badge" id="mission-mode">เครื่องนี้</span>
+      </div>
+      <div class="mission-top">
+        <div>
+          <div class="mission-title" id="mission-state">กำลังเปิดระบบ</div>
+          <div class="mission-sub" id="mission-summary">รอสถานะสดจากระบบหลักและกรรมการ</div>
+        </div>
+        <div class="health-box">
+          <div class="health-score" id="health-score">--</div>
+          <div class="health-label">สุขภาพระบบ</div>
+          <div class="bar-track"><div class="bar-fill" id="health-bar" style="width:0%;background:var(--blue)"></div></div>
+        </div>
+      </div>
+      <div class="compact-grid">
+        <div class="mini-stat">
+          <div class="mini-label">ล็อกความเสี่ยง</div>
+          <div class="mini-val" id="mc-risk">--</div>
+        </div>
+        <div class="mini-stat">
+          <div class="mini-label">ระดับ AI</div>
+          <div class="mini-val" id="mc-autonomy">--</div>
+        </div>
+        <div class="mini-stat">
+          <div class="mini-label">กรรมการ</div>
+          <div class="mini-val" id="mc-committee">--</div>
+        </div>
+        <div class="mini-stat">
+          <div class="mini-label">ควรทำตอนนี้</div>
+          <div class="mini-val" id="mc-action">--</div>
+        </div>
+      </div>
+      <div class="decision-trace" id="decision-trace"></div>
+
+      <div class="card-head" style="margin-top:14px">
+        <span class="card-title">ทีมผู้ตรวจ</span>
+        <span class="card-badge" id="agent-consensus">รอข้อมูล</span>
+      </div>
+      <div class="agent-grid" id="agent-grid"></div>
+    </section>
+
+    <section class="card journal-panel">
+      <div class="card-head">
+        <span class="card-title">สมุดบันทึกการเรียนรู้</span>
+        <span class="card-badge" id="journal-status">รอข้อมูล</span>
+      </div>
+      <div class="journal-list" id="journal-list"></div>
+      <div class="journal-foot">
+        <div class="mini-stat">
+          <div class="mini-label">บันทึกแพ้</div>
+          <div class="mini-val" id="journal-memory">—</div>
+        </div>
+        <div class="mini-stat">
+          <div class="mini-label">จุดต้องระวัง</div>
+          <div class="mini-val" id="journal-losses">—</div>
+        </div>
+      </div>
+
+      <div class="card-head" style="margin-top:14px">
+        <span class="card-title">เหตุการณ์ที่ต้องระวัง</span>
+        <span class="card-badge" id="incident-count">0</span>
+      </div>
+      <div class="incident-list" id="incident-list"></div>
+    </section>
   </div>
 
   <!-- Row 2: Equity chart + AI Status + Indicators -->
@@ -392,7 +1053,7 @@
     <!-- Equity Chart -->
     <div class="card">
       <div class="card-head">
-        <span class="card-title">Equity Curve</span>
+        <span class="card-title">กราฟพอร์ต</span>
         <span class="card-badge" id="eq-last">—</span>
       </div>
       <div class="chart-wrap">
@@ -403,20 +1064,20 @@
     <!-- AI Status -->
     <div class="card">
       <div class="card-head">
-        <span class="card-title">AI Signal</span>
+        <span class="card-title">สัญญาณ AI</span>
         <span class="card-badge" id="ai-thresh">thr —</span>
       </div>
 
       <div class="bias-display">
         <div class="bias-icon neut" id="bias-icon">—</div>
         <div>
-          <div class="bias-label" id="bias-label">Neutral</div>
-          <div class="bias-conf" id="bias-conf">Confidence: —</div>
+          <div class="bias-label" id="bias-label">รอก่อน</div>
+          <div class="bias-conf" id="bias-conf">ความมั่นใจ: —</div>
         </div>
         <div style="margin-left:auto;">
           <div class="conf-arc-wrap">
             <div class="conf-arc-val" id="conf-big">—</div>
-            <div class="conf-arc-label">Score</div>
+            <div class="conf-arc-label">คะแนน</div>
           </div>
         </div>
       </div>
@@ -438,7 +1099,7 @@
           <span class="model-prob" id="prob-lstm">—</span>
         </div>
         <div class="model-row">
-          <span class="model-name">Regime</span>
+          <span class="model-name">สภาพตลาด</span>
           <div class="model-bar-wrap">
             <div class="bar-track"><div class="bar-fill" id="bar-reg" style="width:50%;background:var(--cyan)"></div></div>
           </div>
@@ -452,14 +1113,14 @@
           <span class="model-prob" id="prob-rl">—</span>
         </div>
         <div class="model-row">
-          <span class="model-name" title="Online SGD incremental">Online</span>
+          <span class="model-name" title="Online SGD incremental">ออนไลน์</span>
           <div class="model-bar-wrap">
             <div class="bar-track"><div class="bar-fill" id="bar-online" style="width:50%;background:var(--green)"></div></div>
           </div>
           <span class="model-prob" id="prob-online">—</span>
         </div>
         <div class="model-row">
-          <span class="model-name" title="Pattern memory boost">Memory</span>
+          <span class="model-name" title="Pattern memory boost">ความจำ</span>
           <div class="model-bar-wrap">
             <div class="bar-track"><div class="bar-fill" id="bar-mem" style="width:0%;background:var(--purple)"></div></div>
           </div>
@@ -470,7 +1131,7 @@
 
     <!-- Indicators -->
     <div class="card">
-      <div class="card-head"><span class="card-title">Indicators</span></div>
+      <div class="card-head"><span class="card-title">ตัวชี้วัด</span></div>
       <div class="ind-row">
         <span class="ind-name">ADX</span>
         <span class="ind-val" id="i-adx">—</span>
@@ -502,7 +1163,7 @@
         <span class="ind-pill neut" id="p-stk">—</span>
       </div>
       <div class="ind-row">
-        <span class="ind-name">Spread</span>
+        <span class="ind-name">สเปรด</span>
         <span class="ind-val" id="i-spread">—</span>
         <span class="ind-pill neut" id="p-spread">—</span>
       </div>
@@ -510,41 +1171,41 @@
   </div>
 
   <!-- Row 3: AI Learning Intelligence -->
-  <div class="section-label">AI Learning Intelligence</div>
+  <div class="section-label">ระบบเรียนรู้จากผลลัพธ์</div>
   <div class="row" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;">
 
     <!-- RL Agent Status -->
     <div class="card">
       <div class="card-head">
-        <span class="card-title">RL DQN Agent</span>
+        <span class="card-title">นักเรียนรู้ RL</span>
         <span class="card-badge" id="rl-backend">—</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">Training steps</span>
+        <span class="ls-label">จำนวนรอบเรียน</span>
         <span class="ls-val" id="rl-steps">—</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">Trade outcomes</span>
+        <span class="ls-label">ผลลัพธ์ไม้เทรด</span>
         <span class="ls-val" id="rl-outcomes">—</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">Action accuracy</span>
+        <span class="ls-label">ความแม่นยำการเลือกฝั่ง</span>
         <span class="ls-val" id="rl-acc">—</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">Current weight</span>
+        <span class="ls-label">น้ำหนักตอนนี้</span>
         <span class="ls-val" id="rl-weight">—</span>
       </div>
       <div style="margin-top:10px;">
         <div class="lp-label">
-          <span style="color:var(--text-2)">Exploration ε</span>
+          <span style="color:var(--text-2)">การลองจังหวะใหม่ ε</span>
           <span id="rl-eps">—</span>
         </div>
         <div class="lp-bar-track">
           <div class="lp-bar-fill" id="rl-eps-bar" style="width:90%;background:var(--amber)"></div>
         </div>
         <div class="lp-label">
-          <span style="color:var(--text-2)">Ensemble weight</span>
+          <span style="color:var(--text-2)">น้ำหนักรวมในทีม</span>
           <span id="rl-w-pct">—</span>
         </div>
         <div class="lp-bar-track">
@@ -556,27 +1217,27 @@
     <!-- Market Memory -->
     <div class="card">
       <div class="card-head">
-        <span class="card-title">Pattern Memory</span>
-        <span class="card-badge" id="mem-size">0 patterns</span>
+        <span class="card-title">ความจำแพทเทิร์น</span>
+        <span class="card-badge" id="mem-size">0 แพทเทิร์น</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">Memory win rate</span>
+        <span class="ls-label">อัตราชนะจากความจำ</span>
         <span class="ls-val" id="mem-wr">—</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">Avg profit</span>
+        <span class="ls-label">กำไรเฉลี่ย</span>
         <span class="ls-val" id="mem-avg">—</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">Current matches</span>
+        <span class="ls-label">แพทเทิร์นที่ตรงตอนนี้</span>
         <span class="ls-val" id="mem-matches">—</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">Confidence boost</span>
+        <span class="ls-label">แรงเสริมความมั่นใจ</span>
         <span class="ls-val" id="mem-boost">—</span>
       </div>
       <div style="margin-top:10px;">
-        <div style="font-size:.72rem;color:var(--text-2);margin-bottom:5px;">Last 10 recalled patterns</div>
+        <div style="font-size:.72rem;color:var(--text-2);margin-bottom:5px;">10 แพทเทิร์นล่าสุดที่ดึงมาเทียบ</div>
         <div class="mem-dots" id="mem-dots"></div>
       </div>
     </div>
@@ -584,27 +1245,27 @@
     <!-- Online Learning -->
     <div class="card">
       <div class="card-head">
-        <span class="card-title">Online Learning</span>
+        <span class="card-title">เรียนรู้ระหว่างรัน</span>
         <span class="card-badge" id="ol-badge">SGD</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">SGD updates</span>
+        <span class="ls-label">รอบอัปเดต SGD</span>
         <span class="ls-val" id="ol-updates">—</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">SGD accuracy</span>
+        <span class="ls-label">ความแม่นยำ SGD</span>
         <span class="ls-val" id="ol-acc">—</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">SGD weight</span>
+        <span class="ls-label">น้ำหนัก SGD</span>
         <span class="ls-val" id="ol-weight">—</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">Feedback buffer</span>
+        <span class="ls-label">คิว feedback</span>
         <span class="ls-val" id="ol-buf">—</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">Retraining</span>
+        <span class="ls-label">รอเทรนซ้ำ</span>
         <span class="ls-val" id="retrain-in">—</span>
       </div>
     </div>
@@ -612,27 +1273,27 @@
     <!-- Confidence Tracker -->
     <div class="card">
       <div class="card-head">
-        <span class="card-title">Confidence Tracker</span>
+        <span class="card-title">ตัวติดตามความมั่นใจ</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">Dynamic threshold</span>
+        <span class="ls-label">เกณฑ์ความมั่นใจอัตโนมัติ</span>
         <span class="ls-val" id="ct-thresh">—</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">Final bull prob</span>
+        <span class="ls-label">โอกาส Buy สุดท้าย</span>
         <span class="ls-val" id="ct-bull">—</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">Variance penalty</span>
+        <span class="ls-label">โทษจากความแกว่ง</span>
         <span class="ls-val" id="ct-var">—</span>
       </div>
       <div class="learn-stat">
-        <span class="ls-label">Regime models</span>
+        <span class="ls-label">โมเดลตามสภาพตลาด</span>
         <span class="ls-val" id="ct-regime">—</span>
       </div>
       <div style="margin-top:10px;">
         <div class="lp-label">
-          <span style="color:var(--text-2)">Bull probability</span>
+          <span style="color:var(--text-2)">โอกาสฝั่ง Buy</span>
           <span id="bull-pct">—</span>
         </div>
         <div class="lp-bar-track">
@@ -650,24 +1311,25 @@
     <!-- Open Positions -->
     <div class="card">
       <div class="card-head">
-        <span class="card-title">Open Positions</span>
+        <span class="card-title">ไม้ที่เปิดอยู่</span>
         <span class="card-badge" id="pos-count">0</span>
       </div>
       <table class="tbl">
         <thead>
           <tr>
-            <th>Dir</th>
-            <th>Ticket</th>
+            <th>ฝั่ง</th>
+            <th>ตั๋ว</th>
             <th>Lot</th>
             <th>Entry</th>
             <th>SL</th>
             <th>TP</th>
             <th>AI%</th>
+            <th>กรรมการ</th>
             <th>P&amp;L</th>
           </tr>
         </thead>
         <tbody id="pos-body">
-          <tr><td colspan="8" style="color:var(--text-3);text-align:center;padding:20px 0">No open positions</td></tr>
+          <tr><td colspan="9" style="color:var(--text-3);text-align:center;padding:20px 0">ยังไม่มีไม้เปิดอยู่</td></tr>
         </tbody>
       </table>
     </div>
@@ -675,7 +1337,7 @@
     <!-- Activity Log -->
     <div class="card">
       <div class="card-head">
-        <span class="card-title">Activity Log</span>
+        <span class="card-title">บันทึกกิจกรรม</span>
         <span class="card-badge" id="act-count">0</span>
       </div>
       <div class="act-wrap">
@@ -692,8 +1354,15 @@
 const $  = id => document.getElementById(id);
 const fmt = (v, d=2) => v == null ? '—' : Number(v).toLocaleString('en', {minimumFractionDigits:d, maximumFractionDigits:d});
 const pct = v => v == null ? '—' : (v*100).toFixed(1)+'%';
+const esc = v => String(v ?? '—')
+  .replaceAll('&','&amp;')
+  .replaceAll('<','&lt;')
+  .replaceAll('>','&gt;')
+  .replaceAll('"','&quot;')
+  .replaceAll("'","&#039;");
 
 function fmtPrice(v) { return v == null ? '—' : Number(v).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function fmtPct01(v, d=1) { return v == null ? '—' : (Number(v) * 100).toFixed(d) + '%'; }
 function fmtProfit(v) {
   if (v == null) return '—';
   const n = Number(v);
@@ -702,6 +1371,91 @@ function fmtProfit(v) {
 }
 
 function pill(text, cls) { return `<span class="ind-pill ${cls}">${text}</span>`; }
+
+function thaiSignal(signal) {
+  const s = String(signal || 'HOLD').toUpperCase();
+  if (s === 'BUY') return 'รอซื้อ';
+  if (s === 'SELL') return 'รอขาย';
+  return 'รอจังหวะ';
+}
+
+function thaiBias(bias) {
+  const b = String(bias || 'neutral').toLowerCase();
+  if (b === 'bullish') return 'เอนขึ้น';
+  if (b === 'bearish') return 'เอนลง';
+  return 'กลาง';
+}
+
+function thaiRiskLock(lock) {
+  const map = {
+    OK: 'ปกติ',
+    HALTED: 'หยุดเทรด',
+    DD_BREACH: 'เกิน drawdown',
+    WEEKLY_LIMIT: 'ชนลิมิตสัปดาห์',
+    DAILY_LIMIT: 'ชนลิมิตวัน',
+    COOLDOWN: 'พักหลังขาดทุน',
+    UNKNOWN: 'ไม่ทราบ',
+  };
+  return map[String(lock || 'OK').toUpperCase()] || String(lock || '—');
+}
+
+function thaiModeName(name) {
+  const raw = String(name || 'LOCAL').trim();
+  const key = raw.toUpperCase();
+  const map = {
+    LOCAL: 'เครื่องนี้',
+    TREND: 'อ่านเทรนด์',
+    SIGNAL: 'รอสัญญาณ',
+    ADVISORY: 'ให้คำแนะนำ',
+    SEMI_AUTO: 'กึ่งอัตโนมัติ',
+    FULL_AUTO: 'อัตโนมัติ',
+    AUTONOMOUS: 'อัตโนมัติ',
+  };
+  return map[key] || raw.replace(/_/g, ' ');
+}
+
+function thaiRegime(regime) {
+  const raw = String(regime || '—').trim();
+  const key = raw.toUpperCase();
+  const map = {
+    TREND: 'มีเทรนด์',
+    RANGE: 'แกว่งในกรอบ',
+    HIGH_VOL: 'ผันผวนสูง',
+    UNKNOWN: 'ไม่ทราบ',
+  };
+  return map[key] || raw.replace(/_/g, ' ');
+}
+
+function thaiVerdict(verdict) {
+  const v = String(verdict || '').toUpperCase();
+  if (!v) return 'รอกรรมการ';
+  if (v.includes('APPROVE_WITH_CAUTION')) return 'ผ่านแบบระวัง';
+  if (v.includes('APPROVE')) return 'ผ่าน';
+  if (v.includes('VETO') || v.includes('FAIL')) return 'ไม่ผ่าน';
+  if (v.includes('LOW')) return 'คะแนนต่ำ';
+  if (v.includes('NO_CONSENSUS')) return 'ยังไม่เห็นตรงกัน';
+  if (v.includes('CAUTION')) return 'ระวัง';
+  return verdict;
+}
+
+function thaiAction(action) {
+  const map = {
+    'Execute-ready': 'พร้อมเข้าเมื่อครบเงื่อนไข',
+    Wait: 'รอจังหวะ',
+    Protect: 'ปกป้องพอร์ต',
+  };
+  return map[action] || action || 'รอจังหวะ';
+}
+
+function agentThaiName(name) {
+  const map = {
+    director: 'ผู้อำนวยการ',
+    quant: 'นักวิเคราะห์',
+    risk: 'คุมความเสี่ยง',
+    execution: 'ส่งคำสั่ง',
+  };
+  return map[String(name || '').toLowerCase()] || name || 'ทีมงาน';
+}
 
 function setBar(id, frac, color) {
   const el = $(id);
@@ -726,11 +1480,11 @@ const eqChart = new Chart(eqCtx, {
   data: {
     labels: [],
     datasets: [{
-      label: 'Balance',
+      label: 'เงินคงเหลือ',
       data: [], borderColor: 'var(--blue)', borderWidth: 1.5,
       pointRadius: 0, tension: 0.3, fill: false,
     },{
-      label: 'Equity',
+      label: 'มูลค่าพอร์ต',
       data: [], borderColor: 'var(--green)', borderWidth: 1.5,
       pointRadius: 0, tension: 0.3,
       fill: { target: 'origin', above: 'rgba(34,197,94,.06)', below: 'rgba(239,68,68,.06)' },
@@ -760,11 +1514,11 @@ function setConn(live) {
   if (live) {
     dot.classList.add('pulse');
     chip.className = 'chip live';
-    lbl.textContent = 'Live';
+    lbl.textContent = 'เชื่อมต่อสด';
   } else {
     dot.classList.remove('pulse');
     chip.className = 'chip dead';
-    lbl.textContent = 'Disconnected';
+    lbl.textContent = 'ขาดการเชื่อมต่อ';
   }
 }
 
@@ -787,6 +1541,8 @@ function render(d) {
   renderSignal(d);
   renderIndicators(d);
   renderRegime(d);
+  renderOpsCenter(d);
+  renderLearningJournal(d);
   renderAIInsights(d);
   renderPositions(d);
   renderActivity(d);
@@ -811,21 +1567,21 @@ function renderKPI(d) {
   const stats = d.stats || {};
   $('k-pnl').textContent    = (stats.today_pnl >= 0 ? '+' : '') + fmt(stats.today_pnl ?? 0, 2);
   $('k-pnl').style.color    = stats.today_pnl >= 0 ? 'var(--green)' : 'var(--red)';
-  $('k-pnl-sub').textContent = `${stats.total_trades ?? 0} trades today`;
+  $('k-pnl-sub').textContent = `${stats.total_trades ?? 0} ไม้วันนี้`;
 
   const wr = stats.win_rate ?? 0;
   $('k-wr').textContent   = (wr * 100).toFixed(1) + '%';
   $('k-wr').style.color   = wr >= 0.55 ? 'var(--green)' : wr >= 0.45 ? 'var(--amber)' : 'var(--red)';
-  $('k-wr-sub').textContent = `${stats.wins ?? 0}W / ${stats.losses ?? 0}L`;
+  $('k-wr-sub').textContent = `${stats.wins ?? 0} ชนะ / ${stats.losses ?? 0} แพ้`;
 
   const open = d.open_trades?.length ?? 0;
   $('k-open').textContent   = open;
-  $('k-open-sub').textContent = open > 0 ? 'positions active' : 'no open trades';
+  $('k-open-sub').textContent = open > 0 ? 'มีไม้เปิดอยู่' : 'ยังไม่มีไม้';
 
   $('k-dd').textContent  = dd.toFixed(2) + '%';
   $('k-dd').style.color  = dd < 3 ? 'var(--green)' : dd < 7 ? 'var(--amber)' : 'var(--red)';
-  $('k-dd-sub').textContent = `Peak: $${fmt(d.peak_balance ?? 0, 0)}`;
-  $('k-balance-sub').textContent = `Initial: $${fmt(d.initial_balance ?? 0, 0)}`;
+  $('k-dd-sub').textContent = `จุดสูงสุด $${fmt(d.peak_balance ?? 0, 0)}`;
+  $('k-balance-sub').textContent = `ทุนเริ่ม $${fmt(d.initial_balance ?? 0, 0)}`;
 }
 
 // ── Equity chart ──────────────────────────────────────────────────────────────
@@ -859,8 +1615,8 @@ function renderSignal(d) {
   const confEl = $('bias-conf');
   const confBig = $('conf-big');
 
-  label.textContent = bias.charAt(0).toUpperCase() + bias.slice(1);
-  confEl.textContent = `Confidence: ${conf}%`;
+  label.textContent = thaiBias(bias);
+  confEl.textContent = `ความมั่นใจ: ${conf}%`;
   confBig.textContent = conf || '—';
 
   icon.className = 'bias-icon ' + (bias==='bullish' ? 'bull' : bias==='bearish' ? 'bear' : 'neut');
@@ -891,28 +1647,28 @@ function renderIndicators(d) {
   $('i-spread').textContent = spread != null ? spread.toFixed(1) : '—';
 
   $('p-adx').className  = 'ind-pill ' + (adx != null ? (adx>=40?'bear':adx>=25?'bull':'neut') : 'neut');
-  $('p-adx').textContent = adx != null ? (adx>=40?'HIGH':adx>=25?'TREND':'RANGE') : '—';
+  $('p-adx').textContent = adx != null ? (adx>=40?'แรงมาก':adx>=25?'มีเทรนด์':'แกว่ง') : '—';
 
   $('p-rsi').className  = 'ind-pill ' + (rsi != null ? (rsi>=70?'bear':rsi<=30?'bull':rsi>=55?'bull':'neut') : 'neut');
-  $('p-rsi').textContent = rsi != null ? (rsi>=70?'OB':rsi<=30?'OS':rsi>=55?'Bull':'Neut') : '—';
+  $('p-rsi').textContent = rsi != null ? (rsi>=70?'ซื้อมาก':rsi<=30?'ขายมาก':rsi>=55?'เอียงขึ้น':'กลาง') : '—';
 
   const macdBull = macd != null && macd > 0;
   $('p-macd').className  = 'ind-pill ' + (macd != null ? (macdBull?'bull':'bear') : 'neut');
-  $('p-macd').textContent = macd != null ? (macdBull?'Bull':'Bear') : '—';
+  $('p-macd').textContent = macd != null ? (macdBull?'ขึ้น':'ลง') : '—';
 
   const aboveE50 = close != null && e50 != null && close > e50;
   $('p-e50').className  = 'ind-pill ' + (close!=null ? (aboveE50?'bull':'bear') : 'neut');
-  $('p-e50').textContent = close!=null ? (aboveE50?'Above':'Below') : '—';
+  $('p-e50').textContent = close!=null ? (aboveE50?'เหนือ':'ใต้') : '—';
 
   const aboveE200 = close != null && e200 != null && close > e200;
   $('p-e200').className  = 'ind-pill ' + (close!=null ? (aboveE200?'bull':'bear') : 'neut');
-  $('p-e200').textContent = close!=null ? (aboveE200?'Above':'Below') : '—';
+  $('p-e200').textContent = close!=null ? (aboveE200?'เหนือ':'ใต้') : '—';
 
   $('p-stk').className  = 'ind-pill ' + (stk!=null ? (stk>80?'bear':stk<20?'bull':'neut') : 'neut');
-  $('p-stk').textContent = stk!=null ? (stk>80?'OB':stk<20?'OS':'Mid') : '—';
+  $('p-stk').textContent = stk!=null ? (stk>80?'ซื้อมาก':stk<20?'ขายมาก':'กลาง') : '—';
 
   $('p-spread').className  = 'ind-pill ' + (spread!=null ? (spread<3?'bull':spread<6?'neut':'bear') : 'neut');
-  $('p-spread').textContent = spread!=null ? (spread<3?'Low':spread<6?'Med':'High') : '—';
+  $('p-spread').textContent = spread!=null ? (spread<3?'ต่ำ':spread<6?'กลาง':'สูง') : '—';
 }
 
 // ── Regime badge ──────────────────────────────────────────────────────────────
@@ -922,9 +1678,214 @@ function renderRegime(d) {
   const badge = $('regime-badge');
 
   const regColors = { TREND: 'var(--green)', RANGE: 'var(--cyan)', HIGH_VOL: 'var(--red)' };
-  badge.textContent = regime;
-  badge.style.borderColor = regColors[regime] ? regColors[regime].replace(')',', .4)').replace('var(','rgba(') : '';
+  badge.textContent = thaiRegime(regime);
+  badge.style.borderColor = regColors[regime] || 'var(--border)';
   badge.style.color = regColors[regime] || 'var(--text-2)';
+}
+
+function primarySymbol(d) {
+  return d.symbols && Object.keys(d.symbols).length ? Object.keys(d.symbols)[0] : null;
+}
+
+function primarySymbolData(d) {
+  const sym = primarySymbol(d);
+  return sym ? (d.symbols[sym] || {}) : {};
+}
+
+function verdictClass(verdict) {
+  const v = String(verdict || '').toUpperCase();
+  if (v.includes('VETO') || v.includes('BLOCK') || v.includes('FAIL')) return 'veto';
+  if (v.includes('CAUTION') || v.includes('LOW') || v.includes('WAIT')) return 'caution';
+  if (v.includes('APPROVE') || v === 'OK') return 'approve';
+  return 'standby';
+}
+
+function verdictColor(verdict) {
+  const cls = verdictClass(verdict);
+  if (cls === 'approve') return 'var(--green)';
+  if (cls === 'caution') return 'var(--amber)';
+  if (cls === 'veto') return 'var(--red)';
+  return 'var(--text-2)';
+}
+
+function buildFallbackVotes(d, sd) {
+  const riskLock = d.risk_lock || 'UNKNOWN';
+  const signal = sd.signal || 'HOLD';
+  const spread = Number(sd.spread ?? 0);
+  const conf = Number(sd.ai_confidence ?? 0);
+  const rrOk = d.open_trades?.length ? 'มีไม้เปิดอยู่' : 'ยังไม่มีคำสั่ง';
+  return [
+    { name: 'director', verdict: signal === 'HOLD' ? 'STANDBY' : 'APPROVE', score: signal === 'HOLD' ? 0.45 : 0.68, reasons: [`กลยุทธ์: ${thaiSignal(signal)}`, `สภาพตลาด ${thaiRegime(sd.mi_regime || sd.regime)}`], blockers: [] },
+    { name: 'quant', verdict: conf >= 60 ? 'APPROVE' : conf >= 35 ? 'CAUTION' : 'STANDBY', score: Math.max(0.35, Math.min(0.85, conf / 100)), reasons: [`AI มั่นใจ ${conf}%`, `ADX ${sd.adx ?? '—'}`], blockers: [] },
+    { name: 'risk', verdict: riskLock === 'OK' ? 'APPROVE' : 'VETO', score: riskLock === 'OK' ? 0.78 : 0.20, reasons: [`ความเสี่ยง ${thaiRiskLock(riskLock)}`, `DD ${Number(d.drawdown_pct || 0).toFixed(2)}%`], blockers: riskLock === 'OK' ? [] : [thaiRiskLock(riskLock)] },
+    { name: 'execution', verdict: spread > 8 ? 'CAUTION' : 'APPROVE', score: spread > 8 ? 0.50 : 0.72, reasons: [`สเปรด ${spread.toFixed(1)} pips`, rrOk], blockers: [] },
+  ];
+}
+
+function buildIncidents(d, sd, committee) {
+  const items = [];
+  const riskLock = d.risk_lock || 'OK';
+  const dd = Number(d.drawdown_pct || 0);
+  const spread = Number(sd.spread ?? 0);
+  const openTrades = d.open_trades || [];
+  const losingOpen = openTrades.filter(t => Number(t.profit || 0) < 0);
+
+  if (d.trading_halted) items.push({ level: 'critical', tag: 'halt', title: 'ระบบหยุดเทรดแล้ว', action: 'ห้ามเปิดไม้ใหม่ ตรวจ drawdown, ไม้แพ้ต่อเนื่อง และกิจกรรมล่าสุดก่อนปลดล็อก' });
+  if (riskLock !== 'OK') items.push({ level: 'critical', tag: riskLock, title: 'มีล็อกความเสี่ยง', action: `ให้รอจนสถานะ ${thaiRiskLock(riskLock)} เคลียร์ก่อนเข้าไม้ใหม่` });
+  if (committee && committee.approved === false) {
+    const reason = (committee.blockers || [committee.verdict || 'committee veto'])[0];
+    items.push({ level: 'critical', tag: 'veto', title: 'กรรมการบล็อกจังหวะเข้า', action: `รอจังหวะที่สะอาดกว่านี้ เหตุผลหลัก: ${reason}` });
+  } else if (committee && String(committee.verdict || '').includes('CAUTION')) {
+    items.push({ level: 'warn', tag: 'caution', title: 'ผ่านแบบต้องระวัง', action: `ใช้ lot ลดลง ตัวคูณความเสี่ยง ${Number(committee.risk_multiplier ?? 1).toFixed(2)}` });
+  }
+  if (spread >= 8) items.push({ level: 'warn', tag: 'spread', title: 'สเปรดสูง', action: 'พักการเข้าไม้ใหม่จนสเปรดกลับมาปกติหรือแท่งถัดไปยืนยันสภาพคล่อง' });
+  if (dd >= 5) items.push({ level: 'critical', tag: 'dd', title: 'พอร์ตถูกกดดัน', action: 'ใช้โหมด SAFE ลด lot และให้ผ่านเฉพาะจังหวะเกรด A ที่ตรงแนวโน้ม' });
+  else if (dd >= 3) items.push({ level: 'warn', tag: 'dd', title: 'แรงกดดันพอร์ตเริ่มสูง', action: 'ต้องการคะแนนกรรมการสูง หลีกเลี่ยงสวนเทรนด์และตลาดแกว่งที่ไม่ชัด' });
+  if (losingOpen.length) items.push({ level: 'warn', tag: 'open', title: `มี ${losingOpen.length} ไม้กำลังกดดัน`, action: 'ให้ระบบออกไม้เฝ้าการกลับตัว, spread spike และแรงโมเมนตัมที่แผ่วก่อนเพิ่มไม้' });
+  if (!items.length && (sd.signal || 'HOLD') === 'HOLD') items.push({ level: 'ok', tag: 'standby', title: 'ยังไม่มีจังหวะเข้าไม้', action: 'ระบบปกติ รอสัญญาณกลยุทธ์, bias ที่นิ่ง และกรรมการยืนยัน' });
+  if (!items.length) items.push({ level: 'ok', tag: 'clear', title: 'ระบบพร้อม', action: 'ทางเข้า order พร้อมแล้ว เฝ้าคะแนน, spread และคำตัดสินกรรมการต่อ' });
+  return items.slice(0, 5);
+}
+
+function renderOpsCenter(d) {
+  const sym = primarySymbol(d) || 'XAUUSD';
+  const sd = primarySymbolData(d);
+  const committee = sd.committee || {};
+  const hasCommittee = committee && Object.keys(committee).length > 0;
+  const riskLock = d.risk_lock || 'OK';
+  const autonomy = d.autonomy || {};
+  const signal = sd.signal || 'HOLD';
+  const aiBias = sd.ai_bias || 'neutral';
+  const conf = Number(sd.ai_confidence || 0);
+  const dd = Number(d.drawdown_pct || 0);
+  const spread = Number(sd.spread ?? 0);
+  const incidents = buildIncidents(d, sd, hasCommittee ? committee : null);
+
+  let health = 100;
+  if (riskLock !== 'OK') health -= 30;
+  if (d.trading_halted) health -= 35;
+  if (hasCommittee && committee.approved === false) health -= 20;
+  if (spread >= 8) health -= 12;
+  if (dd >= 3) health -= Math.min(25, dd * 3);
+  if (conf < 20) health -= 5;
+  health = Math.max(0, Math.min(100, Math.round(health)));
+  const healthColor = health >= 75 ? 'var(--green)' : health >= 55 ? 'var(--amber)' : 'var(--red)';
+
+  $('health-score').textContent = health + '%';
+  $('health-score').style.color = healthColor;
+  setBar('health-bar', health / 100, healthColor);
+
+  const committeeText = hasCommittee ? `${thaiVerdict(committee.verdict)} ${committee.score != null ? Math.round(committee.score * 100) + '%' : ''}` : 'รอกรรมการ';
+  const action = incidents[0]?.tag === 'clear' ? 'Execute-ready' : incidents[0]?.tag === 'standby' ? 'Wait' : 'Protect';
+
+  const modeText = thaiModeName(autonomy.level_name);
+  $('mission-mode').textContent = modeText;
+  $('mc-risk').textContent = thaiRiskLock(riskLock);
+  $('mc-risk').style.color = riskLock === 'OK' ? 'var(--green)' : 'var(--red)';
+  $('mc-autonomy').textContent = `L${autonomy.autonomy_level ?? 0} ${modeText}`.trim();
+  $('mc-committee').textContent = committeeText;
+  $('mc-committee').style.color = verdictColor(committee.verdict || (hasCommittee ? '' : 'WAIT'));
+  $('mc-action').textContent = thaiAction(action);
+  $('mc-action').style.color = action === 'Protect' ? 'var(--red)' : action === 'Wait' ? 'var(--amber)' : 'var(--green)';
+
+  const missionState = riskLock !== 'OK' ? 'โหมดปกป้องพอร์ต' : hasCommittee && committee.approved === false ? 'จังหวะเข้าถูกบล็อก' : signal !== 'HOLD' ? `${thaiSignal(signal)}: รอการยืนยันครบชั้น` : 'กำลังสแกนหาจังหวะคุณภาพสูง';
+  $('mission-state').textContent = missionState;
+  $('mission-state').style.color = riskLock !== 'OK' || (hasCommittee && committee.approved === false) ? 'var(--red)' : signal !== 'HOLD' ? 'var(--green)' : 'var(--text)';
+  $('mission-summary').textContent = `${sym}: ${thaiSignal(signal)}, AI ${thaiBias(aiBias)} ${conf}%, ความเสี่ยง ${thaiRiskLock(riskLock)}, กรรมการ ${committeeText}`;
+
+  $('office-thai-summary').textContent = `${sym} ราคา ${fmtPrice(sd.close)} | ${thaiSignal(signal)} | AI ${thaiBias(aiBias)} ${conf}%`;
+  $('office-signal').textContent = `สัญญาณ: ${thaiSignal(signal)}`;
+  $('office-signal').style.color = signal === 'BUY' ? 'var(--green)' : signal === 'SELL' ? 'var(--red)' : 'var(--amber)';
+  $('office-price').textContent = fmtPrice(sd.close);
+  $('office-regime').textContent = thaiRegime(sd.mi_regime || sd.regime);
+  $('office-spread').textContent = spread ? spread.toFixed(1) + ' pips' : '—';
+  $('office-bias').textContent = `${thaiBias(aiBias)} ${conf}%`;
+  $('office-strategy').textContent = thaiSignal(signal);
+  $('office-risk').textContent = thaiRiskLock(riskLock);
+  $('office-ai').textContent = `${thaiBias(aiBias)} ${conf}%`;
+  $('office-exec').textContent = (d.open_trades || []).length ? 'มีไม้เปิดอยู่' : thaiAction(action);
+  $('office-director').textContent = committeeText;
+
+  const trace = [
+    ['กลยุทธ์', thaiSignal(signal)],
+    ['สมอง AI', `${thaiBias(aiBias)} ${conf}%`],
+    ['ตลาด', thaiRegime(sd.mi_regime || sd.regime)],
+    ['ความเสี่ยง', thaiRiskLock(riskLock)],
+    ['กรรมการ', committeeText],
+    ['ส่งคำสั่ง', (d.open_trades || []).length ? 'มีไม้เปิดอยู่' : 'ยังไม่ส่ง'],
+  ];
+  $('decision-trace').innerHTML = trace.map(([k,v]) => `<div class="trace-step"><div class="trace-k">${esc(k)}</div><div class="trace-v">${esc(v)}</div></div>`).join('');
+
+  const votes = hasCommittee && Array.isArray(committee.votes) && committee.votes.length ? committee.votes : buildFallbackVotes(d, sd);
+  const approvals = votes.filter(v => verdictClass(v.verdict) === 'approve').length;
+  $('agent-consensus').textContent = `${approvals}/${votes.length} ผ่าน`;
+  $('agent-grid').innerHTML = votes.map(v => {
+    const cls = verdictClass(v.verdict);
+    const score = v.score != null ? Math.round(Number(v.score) * 100) + '%' : '--';
+    const detail = (v.blockers && v.blockers.length ? v.blockers : v.reasons || []).slice(0, 2).join(' | ');
+    const width = Math.max(0, Math.min(100, Number(v.score || 0) * 100)).toFixed(0);
+    return `<div class="agent-card ${cls}"><div class="agent-head"><span class="agent-name">${esc(agentThaiName(v.name))}</span><span class="agent-score" style="color:${verdictColor(v.verdict)}">${esc(thaiVerdict(v.verdict || 'WAIT'))} ${score}</span></div><div class="agent-meta">${esc(detail || 'รอรอบประเมินล่าสุด')}</div><div class="bar-track"><div class="bar-fill" style="width:${width}%;background:${verdictColor(v.verdict)}"></div></div></div>`;
+  }).join('');
+
+  $('incident-count').textContent = incidents.length;
+  $('incident-list').innerHTML = incidents.map(item => `<div class="incident-item ${esc(item.level)}"><div class="incident-top"><span class="incident-title">${esc(item.title)}</span><span class="incident-tag">${esc(item.tag)}</span></div><div class="incident-action">${esc(item.action)}</div></div>`).join('');
+}
+
+function renderLearningJournal(d) {
+  const journal = d.learning_journal || {};
+  const enabled = journal.enabled !== false;
+  const actions = Array.isArray(journal.action_items) ? journal.action_items : [];
+  const failures = Array.isArray(journal.recent_failures) ? journal.recent_failures : [];
+  const weak = Array.isArray(journal.weak_regimes) ? journal.weak_regimes : [];
+  const losses = Array.isArray(journal.recent_losses) ? journal.recent_losses : [];
+
+  $('journal-status').textContent = enabled ? 'บันทึกอยู่' : 'ยังไม่พบ memory';
+  $('journal-status').style.color = enabled ? 'var(--green)' : 'var(--amber)';
+  $('journal-memory').textContent = failures.length + ' แพทเทิร์น';
+  $('journal-losses').textContent = weak.length ? weak.length + ' สภาพตลาด' : losses.length + ' ไม้แพ้';
+
+  const blocks = [];
+  if (actions.length) {
+    for (const action of actions.slice(0, 4)) {
+      blocks.push({
+        title: 'สิ่งที่ระบบเรียนรู้',
+        body: action,
+        color: 'var(--amber)',
+      });
+    }
+  }
+  if (weak.length) {
+    for (const row of weak.slice(0, 2)) {
+      blocks.push({
+        title: `สภาพตลาดเสี่ยง: ${thaiRegime(row.regime || 'UNKNOWN')}`,
+        body: `ชนะ ${fmtPct01(row.win_rate, 1)} จาก ${row.total || 0} ไม้ ระบบควรลดความมั่นใจหรือรอจังหวะที่สะอาดกว่าเดิม`,
+        color: 'var(--red)',
+      });
+    }
+  }
+  if (failures.length) {
+    const f = failures[0];
+    const sigs = Array.isArray(f.signals) && f.signals.length ? f.signals.join(', ') : 'ไม่มี signal เฉพาะ';
+    blocks.push({
+      title: 'แพทเทิร์นแพ้ล่าสุด',
+      body: `${f.symbol || ''} ${f.direction || ''} / ${f.regime || 'UNKNOWN'} | ${sigs}`,
+      color: 'var(--red)',
+    });
+  }
+  if (!blocks.length) {
+    blocks.push({
+      title: 'พร้อมบันทึกบทเรียน',
+      body: journal.summary || 'ยังมีข้อมูลปิดไม้น้อย ระบบจะเริ่มสรุปข้อควรปรับเมื่อมีไม้แพ้หรือ feedback เพียงพอ',
+      color: 'var(--cyan)',
+    });
+  }
+
+  $('journal-list').innerHTML = blocks.slice(0, 6).map(item => `
+    <div class="journal-item" style="border-color:${item.color}">
+      <strong style="color:${item.color}">${esc(item.title)}</strong>
+      <p>${esc(item.body)}</p>
+    </div>
+  `).join('');
 }
 
 // ── AI Insights (RL + Memory + Ensemble) ──────────────────────────────────────
@@ -976,12 +1937,12 @@ function renderAIInsights(d) {
 
   // ── Pattern Memory panel ────────────────────────────────────────────────────
   const memStats = ls.memory || {};
-  $('mem-size').textContent = (ins.memory_size || memStats.total || 0) + ' patterns';
+  $('mem-size').textContent = (ins.memory_size || memStats.total || 0) + ' แพทเทิร์น';
   $('mem-wr').textContent   = memStats.win_rate != null ? (memStats.win_rate*100).toFixed(1)+'%' : '—';
   $('mem-wr').style.color   = memStats.win_rate != null ? (memStats.win_rate>=0.55?'var(--green)':memStats.win_rate>=0.48?'var(--amber)':'var(--red)') : '';
   $('mem-avg').textContent  = memStats.avg_profit != null ? (memStats.avg_profit>=0?'+':'')+memStats.avg_profit.toFixed(2) : '—';
   $('mem-avg').style.color  = memStats.avg_profit >= 0 ? 'var(--green)' : 'var(--red)';
-  $('mem-matches').textContent = ins.mem_n != null ? ins.mem_n + ' found' : '—';
+  $('mem-matches').textContent = ins.mem_n != null ? ins.mem_n + ' จุดที่ตรง' : '—';
   $('mem-boost').textContent   = ins.mem_boost != null ? (ins.mem_boost>=0?'+':'')+( ins.mem_boost*100).toFixed(1)+'%' : '—';
   $('mem-boost').style.color   = ins.mem_boost > 0 ? 'var(--green)' : ins.mem_boost < 0 ? 'var(--red)' : 'var(--text-2)';
 
@@ -1004,14 +1965,14 @@ function renderAIInsights(d) {
   $('ol-updates').textContent = ins.online_updates != null ? Number(ins.online_updates).toLocaleString() : (ol.n_upd||'—');
   $('ol-acc').textContent     = ol.accuracy != null ? (ol.accuracy*100).toFixed(1)+'%' : '—';
   $('ol-weight').textContent  = ol.weight   != null ? (ol.weight*100).toFixed(1)+'%' : '—';
-  $('ol-buf').textContent     = ins.feedback_size != null ? ins.feedback_size + ' trades' : '—';
+  $('ol-buf').textContent     = ins.feedback_size != null ? ins.feedback_size + ' ไม้' : '—';
   $('retrain-in').textContent = ls.retrain_in || '—';
 
   // ── Confidence Tracker panel ───────────────────────────────────────────────
   $('ct-thresh').textContent = ins.threshold   != null ? (ins.threshold*100).toFixed(0)+'%' : '—';
   $('ct-bull').textContent   = ins.final_bull   != null ? (ins.final_bull*100).toFixed(1)+'%' : '—';
   $('ct-var').textContent    = ins.tab_variance != null ? ins.tab_variance.toFixed(4) : '—';
-  $('ct-regime').textContent = ins.regime_prob  != null ? 'Active' : 'None';
+  $('ct-regime').textContent = ins.regime_prob  != null ? 'กำลังใช้' : 'ยังไม่มี';
   $('ct-summary').textContent = ins.conf_summary || '—';
 
   const bFrac = ins.final_bull ?? 0.5;
@@ -1027,7 +1988,7 @@ function renderPositions(d) {
   $('k-open').textContent    = trades.length;
 
   if (!trades.length) {
-    $('pos-body').innerHTML = '<tr><td colspan="8" style="color:var(--text-3);text-align:center;padding:20px 0">No open positions</td></tr>';
+    $('pos-body').innerHTML = '<tr><td colspan="9" style="color:var(--text-3);text-align:center;padding:20px 0">ยังไม่มีไม้เปิดอยู่</td></tr>';
     return;
   }
 
@@ -1036,15 +1997,20 @@ function renderPositions(d) {
     const dir    = t.direction || '?';
     const dirCls = dir === 'BUY' ? 'bull' : 'bear';
     const pnl    = t.profit ?? null;
+    const cv     = t.committee_verdict || '—';
+    const cvText = cv === '—' ? '—' : thaiVerdict(cv);
+    const cs     = t.committee_score ? Math.round(Number(t.committee_score) * 100) + '%' : '—';
+    const cCls   = verdictClass(cv);
     html += `
       <tr>
-        <td><span class="dir-pill ${dirCls}">${dir}</span></td>
-        <td style="color:var(--text-3)">${t.ticket || '—'}</td>
-        <td>${t.lot_size ?? '—'}</td>
+        <td><span class="dir-pill ${dirCls}">${esc(thaiSignal(dir))}</span></td>
+        <td style="color:var(--text-3)">${esc(t.ticket || '—')}</td>
+        <td>${esc(t.lot_size ?? '—')}</td>
         <td>${fmtPrice(t.entry_price)}</td>
         <td style="color:var(--red)">${fmtPrice(t.sl_price)}</td>
         <td style="color:var(--green)">${fmtPrice(t.tp_price)}</td>
-        <td>${t.ai_confidence ?? '—'}%</td>
+        <td>${esc(t.ai_confidence ?? '—')}%</td>
+        <td><span class="ind-pill ${cCls === 'approve' ? 'bull' : cCls === 'veto' ? 'bear' : 'neut'}">${esc(cvText)} ${esc(cs)}</span></td>
         <td>${fmtProfit(pnl)}</td>
       </tr>`;
   }
@@ -1057,7 +2023,7 @@ function renderActivity(d) {
   $('act-count').textContent = acts.length;
 
   if (!acts.length) {
-    $('act-list').innerHTML = '<div style="color:var(--text-3);padding:12px 0;font-size:.8rem">No activity yet</div>';
+    $('act-list').innerHTML = '<div style="color:var(--text-3);padding:12px 0;font-size:.8rem">ยังไม่มีบันทึกกิจกรรม</div>';
     return;
   }
 
@@ -1067,12 +2033,13 @@ function renderActivity(d) {
     const sym = a.symbol || '';
     const msg = a.message || '';
     const typ = (a.type  || 'INFO').toUpperCase();
-    const msgCls = ['OPEN','CLOSE','WARN','ERROR'].includes(typ) ? 'type-'+typ : '';
+    const normTyp = typ === 'WARNING' ? 'WARN' : typ;
+    const msgCls = ['OPEN','CLOSE','WARN','ERROR'].includes(normTyp) ? 'type-'+normTyp : '';
     html += `
       <div class="act-item">
-        <span class="act-ts">${ts}</span>
-        <span class="act-sym">${sym}</span>
-        <span class="act-msg ${msgCls}">${msg}</span>
+        <span class="act-ts">${esc(ts)}</span>
+        <span class="act-sym">${esc(sym)}</span>
+        <span class="act-msg ${msgCls}">${esc(msg)}</span>
       </div>`;
   }
   $('act-list').innerHTML = html;
