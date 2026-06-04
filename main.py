@@ -35,7 +35,7 @@ import yaml
 from utils import (
     setup_logging, compute_indicators, init_db,
     insert_trade, close_trade_db, record_equity,
-    write_state, get_trade_stats, log_activity,
+    write_state, get_trade_stats, get_today_trade_stats, log_activity,
     get_open_trades_from_db, compute_context_penalty,
 )
 from strategy          import generate_signal, detect_regime
@@ -1736,7 +1736,8 @@ class TradingEngine:
                 'committee':       term.get('committee', {}),
             }
 
-        stats = get_trade_stats()
+        all_time_stats = get_trade_stats()
+        today_stats = get_today_trade_stats()
 
         bal = account_info.balance
         daily_loss_pct   = (self.risk.daily_start_balance - bal) / max(self.risk.daily_start_balance, 1)
@@ -1777,15 +1778,18 @@ class TradingEngine:
             'risk_lock':           risk_lock,
             'trading_halted':      self.risk._trading_halted,
             'stats': {
-                'total_trades': stats.get('total_trades', 0),
-                'wins':         stats.get('wins', 0),
-                'losses':       stats.get('losses', 0),
-                'win_rate':     round(stats.get('win_rate', 0) / 100, 4),
-                'today_pnl':    round(self.risk.daily_pnl(bal), 2),
+                'total_trades': today_stats.get('total_trades', 0),
+                'wins':         today_stats.get('wins', 0),
+                'losses':       today_stats.get('losses', 0),
+                'closed_trades': today_stats.get('closed_trades', 0),
+                'open_trades_today': today_stats.get('open_trades_today', 0),
+                'win_rate':     today_stats.get('win_rate', 0.0),
+                'today_pnl':    today_stats.get('today_pnl', round(self.risk.daily_pnl(bal), 2)),
                 'weekly_pnl':   round(self.risk.weekly_pnl(bal), 2),
-                'total_profit': stats.get('total_profit', 0),
-                'profit_factor':stats.get('profit_factor', 0),
+                'total_profit': today_stats.get('total_profit', 0),
+                'profit_factor':today_stats.get('profit_factor', 0),
             },
+            'all_time_stats': all_time_stats,
             'autonomy': self.cold_start_manager.get_status(),
         })
 

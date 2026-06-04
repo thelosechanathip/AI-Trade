@@ -770,17 +770,9 @@
     }
     .agent-token.is-talking .sprite-avatar {
       animation: agent-talk 1.1s ease-in-out infinite;
-      box-shadow:
-        inset 0 0 0 1px rgba(6,182,212,.32),
-        0 10px 22px rgba(0,0,0,.36),
-        0 0 22px rgba(6,182,212,.24);
     }
     .agent-token.is-alerting .sprite-avatar {
       animation: agent-alert .9s ease-in-out infinite;
-      box-shadow:
-        inset 0 0 0 1px rgba(239,68,68,.38),
-        0 10px 22px rgba(0,0,0,.38),
-        0 0 26px rgba(239,68,68,.34);
     }
     .agent-token.is-moving {
       filter: drop-shadow(0 0 12px rgba(6,182,212,.24));
@@ -791,8 +783,8 @@
       color: #cffafe;
     }
     .agent-avatar {
-      width: 82px;
-      height: 96px;
+      width: 96px;
+      height: 112px;
       margin: 0 auto 2px;
       border-radius: 0;
       display: grid;
@@ -828,7 +820,7 @@
       z-index: 1;
       background-image: var(--sprite-sheet);
       background-repeat: no-repeat;
-      background-size: 328px 576px;
+      background-size: 384px 672px;
       background-position: 0 var(--sprite-row);
       transform: scaleX(var(--facing)) scale(var(--sprite-scale));
       transform-origin: center bottom;
@@ -841,27 +833,13 @@
       will-change: background-position, transform;
     }
     .agent-avatar.sprite-avatar span {
-      position: absolute;
-      right: -3px;
-      top: 14px;
-      bottom: auto;
-      min-width: 22px;
-      padding: 2px 4px;
-      border-radius: 5px;
-      background: rgba(17,24,39,.82);
-      border: 1px solid rgba(139,92,246,.42);
-      color: #ede9fe;
-      font-size: .56rem;
-      line-height: 1;
-      letter-spacing: .4px;
-      text-shadow: 0 1px 2px rgba(0,0,0,.7);
-      z-index: 3;
+      display: none;
     }
-    .sprite-jame { --sprite-sheet: url('assets/team-sprites/jame.png'); }
-    .sprite-nova { --sprite-sheet: url('assets/team-sprites/nova.png'); }
-    .sprite-risk { --sprite-sheet: url('assets/team-sprites/risk.png'); }
-    .sprite-dex { --sprite-sheet: url('assets/team-sprites/dex.png'); }
-    .sprite-vector { --sprite-sheet: url('assets/team-sprites/vector.png'); }
+    .sprite-jame { --sprite-sheet: url('assets/team-sprites-clean/jame.png'); }
+    .sprite-nova { --sprite-sheet: url('assets/team-sprites-clean/nova.png'); }
+    .sprite-risk { --sprite-sheet: url('assets/team-sprites-clean/risk.png'); }
+    .sprite-dex { --sprite-sheet: url('assets/team-sprites-clean/dex.png'); }
+    .sprite-vector { --sprite-sheet: url('assets/team-sprites-clean/vector.png'); }
     .agent-token.risk .agent-avatar { background: linear-gradient(145deg, rgba(239,68,68,.85), rgba(245,158,11,.6)); }
     .agent-token.ai .agent-avatar { background: linear-gradient(145deg, rgba(168,85,247,.8), rgba(59,130,246,.65)); }
     .agent-token.exec .agent-avatar { background: linear-gradient(145deg, rgba(245,158,11,.82), rgba(34,197,94,.6)); }
@@ -876,22 +854,18 @@
       animation: agent-breathe 3.6s ease-in-out infinite;
     }
     .agent-token.is-working .sprite-avatar {
-      --sprite-row: -96px;
+      --sprite-row: -112px;
       --sprite-speed: 1s;
       animation: agent-work 1.7s ease-in-out infinite;
-      box-shadow:
-        inset 0 0 0 1px rgba(139,92,246,.34),
-        0 10px 22px rgba(0,0,0,.38),
-        0 0 24px rgba(139,92,246,.36);
     }
     .agent-token.is-moving .sprite-avatar {
-      --sprite-row: -192px;
-      --sprite-speed: .48s;
-      animation: agent-walk .54s steps(4) infinite;
+      --sprite-row: -224px;
+      --sprite-speed: .36s;
+      animation: agent-walk .42s steps(4) infinite;
     }
-    .agent-token.is-resting .sprite-avatar { --sprite-row: -288px; --sprite-speed: 2.7s; }
-    .agent-token.is-talking .sprite-avatar { --sprite-row: -384px; --sprite-speed: .86s; }
-    .agent-token.is-alerting .sprite-avatar { --sprite-row: -480px; --sprite-speed: .5s; }
+    .agent-token.is-resting .sprite-avatar { --sprite-row: -336px; --sprite-speed: 2.7s; }
+    .agent-token.is-talking .sprite-avatar { --sprite-row: -448px; --sprite-speed: .86s; }
+    .agent-token.is-alerting .sprite-avatar { --sprite-row: -560px; --sprite-speed: .5s; }
     .agent-token.is-moving .agent-avatar::before {
       background:
         radial-gradient(ellipse at 30% 50%, rgba(6,182,212,.36), rgba(6,182,212,0) 42%),
@@ -1080,7 +1054,7 @@
     }
     @keyframes sprite-frames {
       from { background-position: 0 var(--sprite-row); }
-      to { background-position: -328px var(--sprite-row); }
+      to { background-position: -384px var(--sprite-row); }
     }
     @keyframes foot-shadow {
       0%,100% { transform: scaleX(.82); opacity: .28; }
@@ -1864,7 +1838,7 @@ function setAgentTask(role, task, label, active = true, speech = '') {
   const fallbackFacing = role === 'risk' || role === 'exec' ? -1 : 1;
   const facing = nextX === prevX ? Number(el.dataset.facing || fallbackFacing) : (nextX < prevX ? -1 : 1);
   const distance = Math.hypot(nextX - prevX, nextY - prevY);
-  const walkDuration = Math.max(760, Math.min(1900, Math.round(distance * 7.4)));
+  const walkDuration = Math.max(1100, Math.min(2400, Math.round(distance * 10.5)));
 
   for (const cls of Array.from(el.classList)) {
     if (cls.startsWith('task-')) el.classList.remove(cls);
@@ -1980,7 +1954,7 @@ function updateAgentChoreography(d, sd, incidents) {
   applyAgentRoutine({
     d, sd, signal, hasDirectionalSignal, conf, spread, riskLock, dd,
     openTrades, hasLearningItems, hasCritical, hasWarning,
-    phase: Math.floor(Date.now() / 4200),
+    phase: Math.floor(Date.now() / 2400),
   });
 }
 
@@ -2094,12 +2068,20 @@ function renderKPI(d) {
   const stats = d.stats || {};
   $('k-pnl').textContent    = (stats.today_pnl >= 0 ? '+' : '') + fmt(stats.today_pnl ?? 0, 2);
   $('k-pnl').style.color    = stats.today_pnl >= 0 ? 'var(--green)' : 'var(--red)';
-  $('k-pnl-sub').textContent = `${stats.total_trades ?? 0} ไม้วันนี้`;
+  const todayTrades = stats.total_trades ?? 0;
+  const closedToday = stats.closed_trades ?? ((stats.wins ?? 0) + (stats.losses ?? 0));
+  $('k-pnl-sub').textContent = `${todayTrades} ไม้วันนี้`;
 
-  const wr = stats.win_rate ?? 0;
-  $('k-wr').textContent   = (wr * 100).toFixed(1) + '%';
-  $('k-wr').style.color   = wr >= 0.55 ? 'var(--green)' : wr >= 0.45 ? 'var(--amber)' : 'var(--red)';
-  $('k-wr-sub').textContent = `${stats.wins ?? 0} ชนะ / ${stats.losses ?? 0} แพ้`;
+  if (closedToday > 0) {
+    const wr = stats.win_rate ?? 0;
+    $('k-wr').textContent   = (wr * 100).toFixed(1) + '%';
+    $('k-wr').style.color   = wr >= 0.55 ? 'var(--green)' : wr >= 0.45 ? 'var(--amber)' : 'var(--red)';
+    $('k-wr-sub').textContent = `${stats.wins ?? 0} ชนะ / ${stats.losses ?? 0} แพ้`;
+  } else {
+    $('k-wr').textContent = '—';
+    $('k-wr').style.color = 'var(--text)';
+    $('k-wr-sub').textContent = todayTrades > 0 ? 'ยังไม่มีไม้ปิดวันนี้' : 'ยังไม่มีไม้ปิด';
+  }
 
   const open = d.open_trades?.length ?? 0;
   $('k-open').textContent   = open;

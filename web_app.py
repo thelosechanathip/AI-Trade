@@ -50,11 +50,82 @@ BRAIN_DB_PATH  = Path("data/brain_memory.db")
 
 def _read_state() -> dict:
     if not STATE_PATH.exists():
-        return {}
+        return _with_live_today_stats({})
     try:
-        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        return _with_live_today_stats(json.loads(STATE_PATH.read_text(encoding="utf-8")))
     except Exception:
-        return {}
+        return _with_live_today_stats({})
+
+
+def _perf_from_profits(
+    profits: list[float],
+    total_trades: int | None = None,
+    open_trades_today: int | None = None,
+) -> dict:
+    wins = [p for p in profits if p > 0]
+    losses = [p for p in profits if p < 0]
+    closed_total = len(profits)
+    total = closed_total if total_trades is None else int(total_trades)
+    open_count = max(0, total - closed_total) if open_trades_today is None else int(open_trades_today)
+    gross_profit = sum(wins)
+    gross_loss = abs(sum(losses))
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else (
+        float("inf") if gross_profit > 0 else 0.0
+    )
+    return {
+        "total_trades": total,
+        "closed_trades": closed_total,
+        "open_trades_today": max(0, open_count),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": round((len(wins) / closed_total) if closed_total else 0.0, 4),
+        "today_pnl": round(sum(profits), 2),
+        "total_profit": round(sum(profits), 2),
+        "profit_factor": round(profit_factor, 3),
+    }
+
+
+def _today_trade_stats() -> dict:
+    if not DB_PATH.exists():
+        return _perf_from_profits([])
+    from datetime import datetime, timedelta
+
+    start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+    opened_rows = _query(
+        """
+        SELECT status FROM trades
+        WHERE open_time >= ?
+          AND open_time < ?
+        """,
+        (start.isoformat(timespec="seconds"), end.isoformat(timespec="seconds")),
+    )
+    closed_rows = _query(
+        """
+        SELECT profit FROM trades
+        WHERE status='closed'
+          AND profit IS NOT NULL
+          AND close_time >= ?
+          AND close_time < ?
+        """,
+        (start.isoformat(timespec="seconds"), end.isoformat(timespec="seconds")),
+    )
+    open_today = sum(1 for r in opened_rows if str(r.get("status", "")).lower() != "closed")
+    closed_profits = [float(r.get("profit")) for r in closed_rows if r.get("profit") is not None]
+    return _perf_from_profits(
+        closed_profits,
+        total_trades=len(opened_rows),
+        open_trades_today=open_today,
+    )
+
+
+def _with_live_today_stats(state: dict) -> dict:
+    state = dict(state or {})
+    old_stats = state.get("stats") or {}
+    today_stats = _today_trade_stats()
+    today_stats["weekly_pnl"] = old_stats.get("weekly_pnl", state.get("weekly_pnl", 0.0))
+    state["stats"] = today_stats
+    return state
 
 
 def _query(sql: str, params: tuple = ()) -> list:

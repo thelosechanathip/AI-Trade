@@ -67,6 +67,7 @@ class ColdStartManager:
 
     def __init__(self, config: dict = None):
         cfg = (config or {}).get('progressive_autonomy', {})
+        self._cfg          = cfg
         self._level        = int(cfg.get('initial_level', 0))
         self._enabled      = bool(cfg.get('enabled', True))
         self._max_level    = int(cfg.get('max_level', 4))
@@ -110,14 +111,14 @@ class ColdStartManager:
 
     def get_risk_scale(self) -> float:
         """Lot-size multiplier for the current level."""
-        return _RISK_SCALES.get(self._level, 1.0)
+        return self._level_value('risk_scales', _RISK_SCALES, 1.0)
 
     def get_bootstrap_weight(self) -> float:
         """
         Weight of bootstrap confidence vs AI model confidence.
         1.0 = 100% bootstrap (AI cold), 0.0 = 100% AI (fully trained).
         """
-        return _BOOTSTRAP_WEIGHTS.get(self._level, 0.50)
+        return self._level_value('bootstrap_weights', _BOOTSTRAP_WEIGHTS, 0.50)
 
     def get_min_hold_conditions(self) -> int:
         """
@@ -137,7 +138,15 @@ class ColdStartManager:
         Lower levels are more permissive (trust strategy more).
         """
         thresholds = {0: 0.15, 1: 0.20, 2: 0.28, 3: 0.35, 4: 0.40}
-        return thresholds.get(self._level, 0.25)
+        return self._level_value('min_score_thresholds', thresholds, 0.25)
+
+    def _level_value(self, key: str, defaults: Dict[int, float], fallback: float) -> float:
+        custom = self._cfg.get(key, {}) or {}
+        value = custom.get(self._level, custom.get(str(self._level), defaults.get(self._level, fallback)))
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(defaults.get(self._level, fallback))
 
     # ── Upgrade / downgrade ───────────────────────────────────────────────────
 
