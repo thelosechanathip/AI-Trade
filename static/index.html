@@ -48,6 +48,7 @@
       color: var(--text);
       font-family: -apple-system, 'Inter', 'Segoe UI', system-ui, sans-serif;
       min-height: 100vh;
+      overflow-x: hidden;
       -webkit-font-smoothing: antialiased;
     }
 
@@ -109,6 +110,7 @@
 
     /* ── Layout ──────────────────────────────────────────────────────────── */
     .wrap { max-width: 1600px; margin: 0 auto; padding: 16px 16px 40px; }
+    .row, .card, .office-shell > * { min-width: 0; }
 
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .grid-3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; }
@@ -320,17 +322,26 @@
       gap: 12px;
       align-items: center;
     }
+    .office-topbar > *,
+    .mission-top > *,
+    .compact-grid > *,
+    .decision-trace > *,
+    .journal-foot > * {
+      min-width: 0;
+    }
     .mission-title {
       font-size: 1.35rem;
       line-height: 1.1;
       font-weight: 800;
       letter-spacing: .2px;
+      overflow-wrap: anywhere;
     }
     .mission-sub {
       margin-top: 6px;
       color: var(--text-2);
       font-size: .8rem;
       line-height: 1.45;
+      overflow-wrap: anywhere;
     }
     .health-box {
       border: 1px solid var(--border);
@@ -516,6 +527,7 @@
       align-items: center;
       justify-content: space-between;
       gap: 12px;
+      flex-wrap: wrap;
       padding: 14px 16px;
       border-bottom: 1px solid rgba(255,255,255,.08);
       background: rgba(0,0,0,.18);
@@ -526,6 +538,7 @@
       text-transform: uppercase;
       letter-spacing: .8px;
       font-weight: 700;
+      overflow-wrap: anywhere;
     }
     .office-chip {
       display: inline-flex;
@@ -537,6 +550,8 @@
       color: var(--text-2);
       font-size: .72rem;
       white-space: nowrap;
+      max-width: 100%;
+      overflow-wrap: anywhere;
     }
     .office-room {
       position: relative;
@@ -710,15 +725,17 @@
     .node-brief { left: 45%; bottom: 126px; }
     .agent-token {
       position: absolute;
-      width: 112px;
+      width: 124px;
       text-align: center;
       color: var(--text);
       z-index: 2;
       --move-x: 0px;
       --move-y: 0px;
       --facing: 1;
+      --walk-duration: 900ms;
+      --sprite-scale: 1.15;
       transform: translate3d(var(--move-x), var(--move-y), 0);
-      transition: transform .9s cubic-bezier(.22, 1, .36, 1), filter .3s ease;
+      transition: transform var(--walk-duration) cubic-bezier(.28, .82, .18, 1), filter .3s ease;
       will-change: transform;
     }
     .agent-token.has-speech::after {
@@ -767,6 +784,7 @@
     }
     .agent-token.is-moving {
       filter: drop-shadow(0 0 12px rgba(6,182,212,.24));
+      z-index: 5;
     }
     .agent-token.is-moving .agent-task {
       border-color: rgba(6,182,212,.5);
@@ -775,7 +793,7 @@
     .agent-avatar {
       width: 82px;
       height: 96px;
-      margin: 0 auto 5px;
+      margin: 0 auto 2px;
       border-radius: 0;
       display: grid;
       place-items: end;
@@ -789,10 +807,10 @@
     .agent-avatar::before {
       content: '';
       position: absolute;
-      left: 16px;
-      right: 16px;
-      bottom: 4px;
-      height: 12px;
+      left: 11px;
+      right: 11px;
+      bottom: -2px;
+      height: 14px;
       border-radius: 999px;
       background: radial-gradient(ellipse at center, rgba(0,0,0,.48), rgba(0,0,0,0) 72%);
       filter: blur(3px);
@@ -812,7 +830,7 @@
       background-repeat: no-repeat;
       background-size: 328px 576px;
       background-position: 0 var(--sprite-row);
-      transform: scaleX(var(--facing));
+      transform: scaleX(var(--facing)) scale(var(--sprite-scale));
       transform-origin: center bottom;
       animation: sprite-frames var(--sprite-speed) steps(4) infinite;
       filter:
@@ -824,8 +842,9 @@
     }
     .agent-avatar.sprite-avatar span {
       position: absolute;
-      right: 4px;
-      bottom: 4px;
+      right: -3px;
+      top: 14px;
+      bottom: auto;
       min-width: 22px;
       padding: 2px 4px;
       border-radius: 5px;
@@ -867,14 +886,18 @@
     }
     .agent-token.is-moving .sprite-avatar {
       --sprite-row: -192px;
-      --sprite-speed: .58s;
-      animation: agent-walk .8s ease-in-out infinite;
+      --sprite-speed: .48s;
+      animation: agent-walk .54s steps(4) infinite;
     }
     .agent-token.is-resting .sprite-avatar { --sprite-row: -288px; --sprite-speed: 2.7s; }
     .agent-token.is-talking .sprite-avatar { --sprite-row: -384px; --sprite-speed: .86s; }
     .agent-token.is-alerting .sprite-avatar { --sprite-row: -480px; --sprite-speed: .5s; }
     .agent-token.is-moving .agent-avatar::before {
-      animation: foot-shadow .58s steps(4) infinite;
+      background:
+        radial-gradient(ellipse at 30% 50%, rgba(6,182,212,.36), rgba(6,182,212,0) 42%),
+        radial-gradient(ellipse at 70% 50%, rgba(139,92,246,.34), rgba(139,92,246,0) 42%),
+        radial-gradient(ellipse at center, rgba(0,0,0,.5), rgba(0,0,0,0) 72%);
+      animation: foot-shadow .48s steps(4) infinite;
     }
     .agent-token.is-working::before {
       content: '';
@@ -892,7 +915,7 @@
     }
     .agent-task {
       display: inline-flex;
-      max-width: 88px;
+      max-width: 104px;
       margin: 0 auto 4px;
       padding: 3px 7px;
       border-radius: 999px;
@@ -912,7 +935,7 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      max-width: 96px;
+      max-width: 108px;
       padding: 3px 7px;
       border-radius: 5px;
       background: rgba(0,0,0,.55);
@@ -985,6 +1008,7 @@
       color: var(--text-2);
       font-size: .77rem;
       line-height: 1.48;
+      overflow-wrap: anywhere;
     }
     .journal-list {
       display: flex;
@@ -1017,6 +1041,17 @@
       margin-top: 10px;
     }
     @media (max-width: 720px) {
+      .wrap { padding-inline: 10px; }
+      .wrap > .row[style*="grid-template-columns"] {
+        grid-template-columns: 1fr !important;
+      }
+      .mission-top { grid-template-columns: 1fr; }
+      .health-box { width: 100%; }
+      .office-chip {
+        width: 100%;
+        justify-content: center;
+        white-space: normal;
+      }
       .office-stage { min-height: 560px; }
       .office-room { min-height: 500px; }
       .chart-wall { height: 102px; }
@@ -1803,6 +1838,19 @@ const TEAM_TASK_LABELS = {
 
 const TEAM_OFFSETS = { strategy: 0, ai: 1, risk: 2, exec: 3, director: 4 };
 
+function applyAgentVisualState(el, nextTask, active, speech, arrived = true) {
+  const isTransit = !arrived;
+  const shouldWork = !!active && !['rest', 'talk', 'huddle'].includes(nextTask);
+  el.classList.toggle('is-working', arrived && shouldWork);
+  el.classList.toggle('is-idle', arrived && !active && nextTask !== 'rest');
+  el.classList.toggle('is-resting', arrived && nextTask === 'rest');
+  el.classList.toggle('is-talking', arrived && (nextTask === 'talk' || nextTask === 'huddle'));
+  el.classList.toggle('is-alerting', arrived && (nextTask === 'alert' || nextTask === 'risk'));
+  el.classList.toggle('has-speech', arrived && !!speech && !isTransit);
+  if (arrived && speech) el.dataset.speech = speech;
+  else delete el.dataset.speech;
+}
+
 function setAgentTask(role, task, label, active = true, speech = '') {
   const el = $(`team-${role}`);
   if (!el) return;
@@ -1810,32 +1858,40 @@ function setAgentTask(role, task, label, active = true, speech = '') {
   const prevTask = el.dataset.task || '';
   const waypoint = (TEAM_WAYPOINTS[role] && TEAM_WAYPOINTS[role][nextTask]) || TEAM_WAYPOINTS[role]?.idle || {};
   const nextX = Number(waypoint.x || 0);
+  const nextY = Number(waypoint.y || 0);
   const prevX = Number(el.dataset.moveX || 0);
+  const prevY = Number(el.dataset.moveY || 0);
   const fallbackFacing = role === 'risk' || role === 'exec' ? -1 : 1;
   const facing = nextX === prevX ? Number(el.dataset.facing || fallbackFacing) : (nextX < prevX ? -1 : 1);
+  const distance = Math.hypot(nextX - prevX, nextY - prevY);
+  const walkDuration = Math.max(760, Math.min(1900, Math.round(distance * 7.4)));
+
   for (const cls of Array.from(el.classList)) {
     if (cls.startsWith('task-')) el.classList.remove(cls);
   }
+  el.style.setProperty('--walk-duration', `${walkDuration}ms`);
   el.style.setProperty('--move-x', `${nextX}px`);
-  el.style.setProperty('--move-y', `${Number(waypoint.y || 0)}px`);
+  el.style.setProperty('--move-y', `${nextY}px`);
   el.style.setProperty('--beam-rot', `${Number(waypoint.beam || -18)}deg`);
   el.style.setProperty('--facing', facing);
   el.dataset.moveX = String(nextX);
+  el.dataset.moveY = String(nextY);
   el.dataset.facing = String(facing);
   el.classList.add(`task-${nextTask}`);
-  el.classList.toggle('is-working', !!active && !['rest', 'talk', 'huddle'].includes(nextTask));
-  el.classList.toggle('is-idle', !active && nextTask !== 'rest');
-  el.classList.toggle('is-resting', nextTask === 'rest');
-  el.classList.toggle('is-talking', nextTask === 'talk' || nextTask === 'huddle');
-  el.classList.toggle('is-alerting', nextTask === 'alert' || nextTask === 'risk');
-  el.classList.toggle('has-speech', !!speech);
-  if (speech) el.dataset.speech = speech;
-  else delete el.dataset.speech;
-  if (prevTask !== nextTask) {
+
+  clearTimeout(el._moveTimer);
+  if (prevTask !== nextTask && distance > 4) {
     el.classList.add('is-moving');
-    clearTimeout(el._moveTimer);
-    el._moveTimer = setTimeout(() => el.classList.remove('is-moving'), 1100);
+    applyAgentVisualState(el, nextTask, active, speech, false);
+    el._moveTimer = setTimeout(() => {
+      el.classList.remove('is-moving');
+      applyAgentVisualState(el, nextTask, active, speech, true);
+    }, walkDuration + 90);
+  } else {
+    el.classList.remove('is-moving');
+    applyAgentVisualState(el, nextTask, active, speech, true);
   }
+
   el.dataset.task = nextTask;
   const bubble = $(`task-${role}`);
   if (bubble) bubble.textContent = label || 'รอข้อมูล';

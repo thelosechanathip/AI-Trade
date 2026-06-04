@@ -132,9 +132,17 @@ class TradingEngine:
         self.confidence_bootstrap = ConfidenceBootstrap()
         self.cold_start_manager   = ColdStartManager(self.config)
         # Stability layer
-        self.signal_stability     = SignalStabilityTracker(required_cycles=2, window_size=5)
-        self.noise_filter         = NoiseFilter(threshold=0.60)
-        self.anti_chase           = AntiChaseEngine(chase_threshold=0.60)
+        entry_cfg = self.config.get('entry_filters', {})
+        self.signal_stability     = SignalStabilityTracker(
+            required_cycles = int(entry_cfg.get('signal_stability_cycles', 2)),
+            window_size     = int(entry_cfg.get('signal_stability_window', 5)),
+        )
+        self.noise_filter         = NoiseFilter(
+            threshold=float(entry_cfg.get('noise_threshold', 0.60))
+        )
+        self.anti_chase           = AntiChaseEngine(
+            chase_threshold=float(entry_cfg.get('chase_threshold', 0.60))
+        )
         self.context_persistence  = ContextPersistenceEngine(
             ema_alpha=0.20, flip_threshold=0.72, min_cycles_before_flip=3
         )
@@ -911,6 +919,23 @@ class TradingEngine:
             log_activity(symbol, "รอจังหวะ — ยังไม่มีสัญญาณ", 'info')
             return
 
+        ai_signal = {
+            'bullish': 'BUY',
+            'bearish': 'SELL',
+        }.get(str(ai_bias).lower())
+        ai_min_conf = float(cfg.get('ai', {}).get('min_confidence', 52))
+        ai_conflict_block = float(cfg.get('ai', {}).get('conflict_block_confidence', 75))
+        if ai_signal and ai_signal != signal and ai_confidence >= ai_conflict_block:
+            log_activity(
+                symbol,
+                f"AI conflict: rule={signal} แต่ AI={ai_signal} {ai_confidence}% — skip",
+                'warning',
+            )
+            return
+        ai_alignment_bonus = (
+            0.03 if ai_signal == signal and ai_confidence >= ai_min_conf else 0.0
+        )
+
         # ── Bootstrap Confidence + Final Trade Score ──────────────────────────
         # Blends bootstrap (technical) confidence with Brain (AI) confidence
         # to produce a single quality gate that works even during cold-start.
@@ -929,7 +954,7 @@ class TradingEngine:
         bw               = self.cold_start_manager.get_bootstrap_weight()
         effective_ai     = bootstrap.normalized * bw + brain_decision.confidence * (1.0 - bw)
         setup_quality    = float(getattr(mi_narrative, 'setup_quality', 0.5))
-        final_score      = setup_quality * 0.60 + effective_ai * 0.40
+        final_score      = min(1.0, setup_quality * 0.60 + effective_ai * 0.40 + ai_alignment_bonus)
         min_score        = self.cold_start_manager.get_min_score_threshold()
 
         # ── Same-direction loss penalty ───────────────────────────────────────
@@ -996,6 +1021,7 @@ class TradingEngine:
             f"{symbol}: final_score={final_score:.0%} "
             f"(setup={setup_quality:.0%} ai_eff={effective_ai:.0%} "
             f"bootstrap={bootstrap.score:.0f}/100 bw={bw:.0%} "
+            f"ai_bonus={ai_alignment_bonus:.0%} "
             f"dir_pen={dir_penalty:.0%} ctx_pen={ctx_penalty:.0%} "
             f"recent_loss={'yes' if time.time()-last_loss<recent_loss_window else 'no'}) "
             f"min={min_score:.0%}"
@@ -1090,10 +1116,17 @@ class TradingEngine:
             )
 
         # ── Setup grade from adjusted_score ──────────────────────────────────
-        # A+ = full size, A = 0.80×, B = 0.55×, C = HOLD
-        if   adjusted_score >= 0.70: grade, grade_scale = 'A+', 1.00
-        elif adjusted_score >= 0.58: grade, grade_scale = 'A',  0.80
-        elif adjusted_score >= 0.45: grade, grade_scale = 'B',  0.55
+        # A+ = full size, A/B = config-scaled size, C = HOLD
+        entry_cfg = cfg.get('entry_filters', {})
+        grade_a_plus_at = float(entry_cfg.get('grade_a_plus_score', 0.70))
+        grade_a_at      = float(entry_cfg.get('grade_a_score', 0.58))
+        grade_b_at      = float(entry_cfg.get('grade_b_score', 0.45))
+        grade_a_scale   = float(entry_cfg.get('grade_a_scale', 0.80))
+        grade_b_scale   = float(entry_cfg.get('grade_b_scale', 0.55))
+
+        if   adjusted_score >= grade_a_plus_at: grade, grade_scale = 'A+', 1.00
+        elif adjusted_score >= grade_a_at:      grade, grade_scale = 'A',  grade_a_scale
+        elif adjusted_score >= grade_b_at:      grade, grade_scale = 'B',  grade_b_scale
         else:
             log_activity(symbol, f"Grade C setup ({adjusted_score:.0%}) — skip", 'info')
             return
@@ -1104,11 +1137,15 @@ class TradingEngine:
         )
 
         # Confidence scale for lot sizing uses adjusted_score
-        if   adjusted_score >= 0.65: conf_scale = 1.00
-        elif adjusted_score >= 0.55: conf_scale = 0.85
-        elif adjusted_score >= 0.45: conf_scale = 0.70
-        elif adjusted_score >= 0.35: conf_scale = 0.55
-        else:                        conf_scale = 0.45
+        conf_full_at  = float(entry_cfg.get('conf_full_score', 0.65))
+        conf_mid_at   = float(entry_cfg.get('conf_mid_score', 0.55))
+        conf_low_at   = float(entry_cfg.get('conf_low_score', 0.45))
+        conf_mid_mult = float(entry_cfg.get('conf_mid_scale', 0.85))
+        conf_low_mult = float(entry_cfg.get('conf_low_scale', 0.70))
+        if   adjusted_score >= conf_full_at: conf_scale = 1.00
+        elif adjusted_score >= conf_mid_at:  conf_scale = conf_mid_mult
+        elif adjusted_score >= conf_low_at:  conf_scale = conf_low_mult
+        else:                                conf_scale = 0.55
 
         # ── Direction ban check ───────────────────────────────────────────────
         if self._is_direction_banned(symbol, signal):

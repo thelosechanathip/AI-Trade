@@ -8,79 +8,81 @@ trading:
   magic_number: 20240101
 
 risk:
-  risk_per_trade: 0.0015
-  max_concurrent_trades: 2
+  risk_per_trade: 0.015
+  max_concurrent_trades: 3
   max_per_direction: 2
-  max_daily_loss: 0.015
-  max_weekly_loss: 0.04
-  max_drawdown: 0.05
-  min_rr_ratio: 1.8
-  atr_sl_multiplier: 1.8
-  atr_tp_multiplier: 3.6
-  use_kelly: false
-  kelly_max_fraction: 0.005
-  dd_scale_start: 0.02
-  dd_scale_min: 0.20
-  max_loss_streak: 3
-  loss_streak_scale: 0.35
-  mode: "safe"
+  max_daily_loss: 0.05
+  max_weekly_loss: 0.10
+  max_drawdown: 0.15
+  min_rr_ratio: 1.5
+  atr_sl_multiplier: 1.5
+  atr_tp_multiplier: 4.5
+  use_kelly: true
+  kelly_max_fraction: 0.030
+  dd_scale_start: 0.06
+  dd_scale_min: 0.40
+  max_loss_streak: 4
+  loss_streak_scale: 0.65
+  mode: "aggressive"
   safe_risk_multiplier: 0.50
-  aggressive_risk_multiplier: 1.00
+  aggressive_risk_multiplier: 1.25
   adaptive_cooldown:
     enabled: true
     hours_map:
-      1: 1
-      2: 3
-      3: 8
-    halt_at_streak: 4
+      1: 0
+      2: 1
+      3: 3
+      4: 8
+    halt_at_streak: 5
 
 strategy:
   ema_fast: 50
   ema_slow: 200
   rsi_period: 14
-  rsi_buy_min: 45
-  rsi_buy_max: 75
-  rsi_sell_min: 25
-  rsi_sell_max: 55
+  rsi_buy_min: 40
+  rsi_buy_max: 78
+  rsi_sell_min: 22
+  rsi_sell_max: 60
   macd_fast: 12
   macd_slow: 26
   macd_signal: 9
   atr_period: 14
-  atr_threshold_multiplier: 0.50
-  structure_lookback: 20
-  swing_strength: 5
-  min_confluence: 3
+  atr_threshold_multiplier: 0.35
+  structure_lookback: 15
+  swing_strength: 4
+  min_confluence: 2
   adx_period: 14
-  adx_trend_threshold: 25
-  adx_range_threshold: 18
-  adx_high_vol_threshold: 42
+  adx_trend_threshold: 20
+  adx_range_threshold: 15
+  adx_high_vol_threshold: 45
   bb_period: 20
   bb_std: 2.0
   stoch_k: 14
   stoch_d: 3
   stoch_smooth: 3
-  range_rsi_oversold: 33
-  range_rsi_overbought: 67
-  range_bb_pct_buy: 0.12
-  range_bb_pct_sell: 0.88
-  high_vol_sl_multiplier: 1.6
-  high_vol_size_scale: 0.65
+  range_rsi_oversold: 38
+  range_rsi_overbought: 62
+  range_bb_pct_buy: 0.18
+  range_bb_pct_sell: 0.82
+  high_vol_sl_multiplier: 1.4
+  high_vol_size_scale: 0.75
 
 sessions:
   enabled: true
   london:
-    start: "07:00"
-    end: "16:00"
+    start: "06:00"
+    end: "17:00"
   new_york:
     start: "12:00"
-    end: "21:00"
+    end: "22:00"
 
 ai:
   enabled: true
-  min_confidence: 68
+  min_confidence: 48
+  conflict_block_confidence: 72
   model_type: "ensemble"
-  retrain_interval: 360
-  forward_bars: 12
+  retrain_interval: 240
+  forward_bars: 8
   target_move_pct: 0.0025
   training_bars: 2000
 
@@ -88,68 +90,84 @@ optimizer:
   n_trials: 40
   interval_cycles: 3
 
+entry_filters:
+  signal_stability_cycles: 1
+  signal_stability_window: 4
+  noise_threshold: 0.66
+  chase_threshold: 0.66
+  grade_a_plus_score: 0.66
+  grade_a_score: 0.54
+  grade_b_score: 0.40
+  grade_a_scale: 0.90
+  grade_b_scale: 0.70
+  conf_full_score: 0.62
+  conf_mid_score: 0.52
+  conf_low_score: 0.40
+  conf_mid_scale: 0.90
+  conf_low_scale: 0.75
+
 trade_management:
-  breakeven_r: 1.0
-  breakeven_buffer_pts: 5
-  trailing_r: 1.5
-  trailing_atr_mult: 1.0
-  trailing_step_r: 0.5
+  breakeven_r: 0.8
+  breakeven_buffer_pts: 3
+  trailing_r: 1.2
+  trailing_atr_mult: 0.8
+  trailing_step_r: 0.4
   partial_close: true
   partial_close_stages:
-    - r: 1.0
-      pct: 0.30
-    - r: 2.0
+    - r: 0.8
+      pct: 0.20
+    - r: 1.8
       pct: 0.30
     - r: 3.0
-      pct: 0.40
+      pct: 0.50
   time_exit_enabled: true
-  time_exit_bars: 48
-  time_exit_min_r: -0.3
-  cooldown_minutes: 60
-  recent_loss_penalty_minutes: 45
-  recent_loss_penalty_score: 0.06
+  time_exit_bars: 36
+  time_exit_min_r: -0.2
+  cooldown_minutes: 20
+  recent_loss_penalty_minutes: 15
+  recent_loss_penalty_score: 0.03
   news_filter_enabled: true
-  news_blackout_before: 30
-  news_blackout_after: 15
-  min_sl_points: 12.0
-  max_spread_gold: 10.0
-  max_spread_forex: 6.0
+  news_blackout_before: 15
+  news_blackout_after: 5
+  min_sl_points: 10.0
+  max_spread_gold: 20.0
+  max_spread_forex: 8.0
 
 execution:
   max_retries: 3
   retry_delay: 1
-  deviation: 20
+  deviation: 30
 
 htf_filter:
   enabled: true
   timeframe: "H4"
   ema_period: 200
   bars: 250
-  neutral_zone: 0.005
+  neutral_zone: 0.007
 
 direction_ban:
   enabled: true
-  max_same_dir_losses: 2
-  ban_hours: 6
-  ban_hours_soft: 2
-  opposite_cooldown_min: 45
+  max_same_dir_losses: 3
+  ban_hours: 4
+  ban_hours_soft: 1
+  opposite_cooldown_min: 20
 
 trend_dominance:
   enabled: true
-  adx_strong_threshold: 28
-  trend_strength_block: 0.55
-  exhaustion_ema200_pct: 0.025
-  rsi_recovery_level: 38
-  rsi_rejection_level: 62
+  adx_strong_threshold: 24
+  trend_strength_block: 0.65
+  exhaustion_ema200_pct: 0.030
+  rsi_recovery_level: 36
+  rsi_rejection_level: 64
   rsi_momentum_swing: 5
 
 market_intelligence:
   enabled: true
-  adx_strong: 28
+  adx_strong: 24
   divergence_lookback: 35
   swing_strength: 3
-  displacement_atr_mult: 2.0
-  reversal_score_threshold: 2
+  displacement_atr_mult: 2.3
+  reversal_score_threshold: 3
 
 dashboard:
   refresh_interval: 5
@@ -157,30 +175,30 @@ dashboard:
 
 progressive_autonomy:
   enabled: true
-  initial_level: 0
-  max_level: 2
+  initial_level: 1
+  max_level: 3
 
 learning_analytics:
   enabled: true
-  min_trades: 8
-  block_win_rate: 0.20
-  penalty_win_rate: 0.38
+  min_trades: 10
+  block_win_rate: 0.18
+  penalty_win_rate: 0.32
   lookback_days: 60
 
 committee_guard:
   enabled: true
   fail_closed: true
-  min_score: 0.62
+  min_score: 0.56
   min_score_safe: 0.66
   min_agent_approvals: 3
-  min_adjusted_score: 0.45
-  max_uncertainty: 0.72
-  max_reversal_probability: 0.70
-  max_noise_score: 0.58
-  max_chase_score: 0.58
-  max_spread_atr_ratio: 0.10
-  warning_spread_atr_ratio: 0.07
-  htf_conflict_strength: 0.55
+  min_adjusted_score: 0.40
+  max_uncertainty: 0.80
+  max_reversal_probability: 0.78
+  max_noise_score: 0.64
+  max_chase_score: 0.64
+  max_spread_atr_ratio: 0.12
+  warning_spread_atr_ratio: 0.09
+  htf_conflict_strength: 0.62
   blocked_regimes: ["HIGH_VOL", "EXHAUSTION"]
   caution_regimes: ["RANGE", "REVERSAL", "LIQUIDITY_GRAB", "ACCUMULATION", "DISTRIBUTION"]
 

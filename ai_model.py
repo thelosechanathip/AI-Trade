@@ -499,9 +499,9 @@ class AIModel:
         except Exception:
             self._online = None
 
-        # Use fixed 0.52 so bias classification stays sensitive regardless of min_confidence config.
-        # The external gate in main.py controls the actual trading threshold.
-        base_conf = 0.52
+        # Bias classification follows config so aggressive mode can act on a
+        # slight directional edge, while safe profiles can demand stronger AI.
+        base_conf = float(np.clip(float(self._cfg.get('min_confidence', 52)) / 100.0, 0.45, 0.75))
         self._conf_tracker = _ConfidenceTracker(base=base_conf)
 
         # ── RL Agent ──────────────────────────────────────────────────────────
@@ -1797,14 +1797,13 @@ class AIModel:
                 'memory_size':   len(self._memory) if self._memory else 0,
             }
 
-            if bull_prob >= min_conf:
-                conf = int(bull_prob * 100 * variance_factor)
-                return 'bullish', conf
-            if bear_prob >= min_conf:
-                conf = int(bear_prob * 100 * variance_factor)
-                return 'bearish', conf
+            dominant_bias = 'bullish' if bull_prob >= bear_prob else 'bearish'
+            dominant_prob = max(bull_prob, bear_prob)
+            if dominant_prob >= min_conf:
+                conf = int(dominant_prob * 100 * variance_factor)
+                return dominant_bias, conf
 
-            return 'neutral', int(max(bull_prob, bear_prob) * 100)
+            return 'neutral', int(dominant_prob * 100)
 
         except Exception as exc:
             logger.warning(f"AI predict error: {exc}")
