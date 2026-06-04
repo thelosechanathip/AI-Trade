@@ -557,6 +557,24 @@
         linear-gradient(180deg, transparent 50%, rgba(3,7,18,.34));
       z-index: 0;
     }
+    .office-room::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 1;
+      opacity: .32;
+      mix-blend-mode: screen;
+      background:
+        linear-gradient(100deg, transparent 0 38%, rgba(139,92,246,.18) 45%, transparent 54%),
+        radial-gradient(circle at 50% 45%, rgba(6,182,212,.13), transparent 26%);
+      animation: room-scan 7.5s ease-in-out infinite;
+    }
+    .office-room.mode-alert::after {
+      background:
+        linear-gradient(100deg, transparent 0 38%, rgba(239,68,68,.18) 45%, transparent 54%),
+        radial-gradient(circle at 50% 45%, rgba(245,158,11,.12), transparent 26%);
+    }
     .chart-wall {
       position: absolute;
       left: 18px;
@@ -657,12 +675,50 @@
     .office-room .war-table {
       display: none;
     }
+    .work-node {
+      position: absolute;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      border: 1px solid rgba(139,92,246,.34);
+      background: rgba(3,7,18,.42);
+      color: rgba(226,232,240,.8);
+      font-size: 0;
+      font-weight: 800;
+      letter-spacing: .8px;
+      text-transform: uppercase;
+      box-shadow: 0 0 18px rgba(139,92,246,.18);
+      backdrop-filter: blur(4px);
+    }
+    .work-node::before {
+      content: '';
+      position: absolute;
+      inset: -5px;
+      border-radius: inherit;
+      border: 1px solid rgba(6,182,212,.18);
+      opacity: .55;
+      animation: node-pulse 2.8s ease-in-out infinite;
+    }
+    .node-chart { left: 16%; top: 138px; }
+    .node-brain { left: 45%; top: 132px; }
+    .node-risk { right: 12%; top: 142px; }
+    .node-exec { right: 26%; bottom: 112px; }
+    .node-brief { left: 45%; bottom: 126px; }
     .agent-token {
       position: absolute;
       width: 112px;
       text-align: center;
       color: var(--text);
       z-index: 2;
+      --move-x: 0px;
+      --move-y: 0px;
+      transform: translate3d(var(--move-x), var(--move-y), 0);
+      transition: transform .9s cubic-bezier(.22, 1, .36, 1), filter .3s ease;
+      will-change: transform;
     }
     .agent-avatar {
       width: 64px;
@@ -721,6 +777,51 @@
       background-position: var(--sprite-x) var(--sprite-y);
       background-color: rgba(17,24,39,.96);
     }
+    .agent-token.is-idle .sprite-avatar {
+      animation: agent-breathe 3.6s ease-in-out infinite;
+    }
+    .agent-token.is-working .sprite-avatar {
+      animation: agent-work 1.7s ease-in-out infinite;
+      box-shadow:
+        inset 0 0 0 1px rgba(139,92,246,.34),
+        0 10px 22px rgba(0,0,0,.38),
+        0 0 24px rgba(139,92,246,.36);
+    }
+    .agent-token.is-moving .sprite-avatar {
+      animation: agent-walk .8s ease-in-out infinite;
+    }
+    .agent-token.is-working::before {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 40px;
+      width: 88px;
+      height: 2px;
+      transform-origin: left center;
+      transform: rotate(var(--beam-rot, -18deg));
+      background: linear-gradient(90deg, rgba(139,92,246,.0), rgba(139,92,246,.9), rgba(6,182,212,.0));
+      opacity: .65;
+      filter: blur(.2px);
+      animation: data-beam 1.4s ease-in-out infinite;
+    }
+    .agent-task {
+      display: inline-flex;
+      max-width: 88px;
+      margin: 0 auto 4px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      background: rgba(3,7,18,.72);
+      border: 1px solid rgba(139,92,246,.28);
+      color: #ddd6fe;
+      font-size: .58rem;
+      font-weight: 800;
+      line-height: 1.05;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      box-shadow: 0 0 14px rgba(139,92,246,.18);
+      backdrop-filter: blur(5px);
+    }
     .agent-label {
       display: inline-flex;
       align-items: center;
@@ -741,12 +842,23 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      display: none;
     }
     .agent-strategy { left: 36px; top: 228px; }
     .agent-risk { right: 52px; top: 228px; }
     .agent-ai { left: 162px; bottom: 72px; }
     .agent-exec { right: 172px; bottom: 72px; }
     .agent-director { left: calc(50% - 56px); top: 286px; }
+    .agent-strategy.task-scan { --move-x: 42px; --move-y: -120px; --beam-rot: -18deg; }
+    .agent-strategy.task-signal { --move-x: 128px; --move-y: -104px; --beam-rot: -12deg; }
+    .agent-ai.task-analyze { --move-x: 154px; --move-y: -118px; --beam-rot: -32deg; }
+    .agent-ai.task-learn { --move-x: 206px; --move-y: -54px; --beam-rot: -8deg; }
+    .agent-risk.task-risk { --move-x: -74px; --move-y: -114px; --beam-rot: -154deg; }
+    .agent-risk.task-guard { --move-x: -36px; --move-y: -42px; --beam-rot: -150deg; }
+    .agent-exec.task-execute { --move-x: 58px; --move-y: -92px; --beam-rot: -132deg; }
+    .agent-exec.task-monitor { --move-x: 24px; --move-y: -78px; --beam-rot: -145deg; }
+    .agent-director.task-report { --move-x: 0px; --move-y: -86px; --beam-rot: -90deg; }
+    .agent-director.task-alert { --move-x: -82px; --move-y: -18px; --beam-rot: -124deg; }
     .office-readout {
       position: absolute;
       left: 18px;
@@ -821,6 +933,7 @@
       .chart-wall { height: 102px; }
       .war-table { top: 150px; }
       .desk-a, .desk-b, .desk-c, .desk-d { display: none; }
+      .work-node { display: none; }
       .agent-strategy { left: 18px; top: 236px; }
       .agent-risk { right: 18px; top: 236px; }
       .agent-ai { left: 22px; bottom: 132px; }
@@ -828,6 +941,40 @@
       .agent-director { top: 326px; }
       .office-readout { grid-template-columns: repeat(2, 1fr); }
       .journal-foot { grid-template-columns: 1fr; }
+    }
+    @keyframes agent-breathe {
+      0%,100% { transform: translateY(0); }
+      50% { transform: translateY(-3px); }
+    }
+    @keyframes agent-work {
+      0%,100% { transform: translateY(0) scale(1); }
+      50% { transform: translateY(-5px) scale(1.025); }
+    }
+    @keyframes agent-walk {
+      0%,100% { transform: translateY(0) rotate(-1deg); }
+      50% { transform: translateY(-7px) rotate(1deg); }
+    }
+    @keyframes data-beam {
+      0%,100% { opacity: .25; width: 52px; }
+      50% { opacity: .9; width: 104px; }
+    }
+    @keyframes node-pulse {
+      0%,100% { transform: scale(.96); opacity: .34; }
+      50% { transform: scale(1.08); opacity: .78; }
+    }
+    @keyframes room-scan {
+      0%,100% { transform: translateX(-10%); opacity: .18; }
+      50% { transform: translateX(10%); opacity: .38; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .agent-token,
+      .agent-token .sprite-avatar,
+      .agent-token::before,
+      .work-node::before,
+      .office-room::after {
+        animation: none !important;
+        transition: none !important;
+      }
     }
 
     /* ── Learning progress bar ───────────────────────────────────────────── */
@@ -919,7 +1066,7 @@
         </div>
         <div class="office-chip" id="office-signal">สัญญาณ: รอ</div>
       </div>
-      <div class="office-room">
+      <div class="office-room" id="office-room">
         <div class="chart-wall">
           <div class="chart-line"></div>
           <div class="chart-bars">
@@ -933,28 +1080,38 @@
         <div class="desk desk-c"></div>
         <div class="desk desk-d"></div>
         <div class="war-table"></div>
-        <div class="agent-token agent-strategy">
+        <div class="work-node node-chart">Chart</div>
+        <div class="work-node node-brain">AI Core</div>
+        <div class="work-node node-risk">Risk</div>
+        <div class="work-node node-exec">Order</div>
+        <div class="work-node node-brief">Brief</div>
+        <div class="agent-token agent-strategy is-idle task-scan" id="team-strategy" data-task="scan">
           <div class="agent-avatar sprite-avatar sprite-jame"><span>ST</span></div>
+          <div class="agent-task" id="task-strategy">สแกนกราฟ</div>
           <div class="agent-label">นักกลยุทธ์</div>
           <div class="agent-sub" id="office-strategy">รอสัญญาณ</div>
         </div>
-        <div class="agent-token risk agent-risk">
+        <div class="agent-token risk agent-risk is-idle task-guard" id="team-risk" data-task="guard">
           <div class="agent-avatar sprite-avatar sprite-risk"><span>RK</span></div>
+          <div class="agent-task" id="task-risk">เฝ้าความเสี่ยง</div>
           <div class="agent-label">คุมเสี่ยง</div>
           <div class="agent-sub" id="office-risk">ตรวจความเสี่ยง</div>
         </div>
-        <div class="agent-token ai agent-ai">
+        <div class="agent-token ai agent-ai is-idle task-analyze" id="team-ai" data-task="analyze">
           <div class="agent-avatar sprite-avatar sprite-nova"><span>AI</span></div>
+          <div class="agent-task" id="task-ai">อ่านข้อมูล</div>
           <div class="agent-label">สมอง AI</div>
           <div class="agent-sub" id="office-ai">อ่านแนวโน้ม</div>
         </div>
-        <div class="agent-token exec agent-exec">
+        <div class="agent-token exec agent-exec is-idle task-idle" id="team-exec" data-task="idle">
           <div class="agent-avatar sprite-avatar sprite-dex"><span>EX</span></div>
+          <div class="agent-task" id="task-exec">รอคำสั่ง</div>
           <div class="agent-label">ส่งคำสั่ง</div>
           <div class="agent-sub" id="office-exec">รอคำสั่ง</div>
         </div>
-        <div class="agent-token agent-director">
+        <div class="agent-token agent-director is-idle task-report" id="team-director" data-task="report">
           <div class="agent-avatar sprite-avatar sprite-vector"><span>DR</span></div>
+          <div class="agent-task" id="task-director">สรุปทีม</div>
           <div class="agent-label">หัวหน้าทีม</div>
           <div class="agent-sub" id="office-director">สรุปภาพรวม</div>
         </div>
@@ -1457,6 +1614,82 @@ function agentThaiName(name) {
   return map[String(name || '').toLowerCase()] || name || 'ทีมงาน';
 }
 
+function setAgentTask(role, task, label, active = true) {
+  const el = $(`team-${role}`);
+  if (!el) return;
+  const nextTask = task || 'idle';
+  const prevTask = el.dataset.task || '';
+  for (const cls of Array.from(el.classList)) {
+    if (cls.startsWith('task-')) el.classList.remove(cls);
+  }
+  el.classList.add(`task-${nextTask}`);
+  el.classList.toggle('is-working', !!active);
+  el.classList.toggle('is-idle', !active);
+  if (prevTask !== nextTask) {
+    el.classList.add('is-moving');
+    clearTimeout(el._moveTimer);
+    el._moveTimer = setTimeout(() => el.classList.remove('is-moving'), 950);
+  }
+  el.dataset.task = nextTask;
+  const bubble = $(`task-${role}`);
+  if (bubble) bubble.textContent = label || 'รอข้อมูล';
+}
+
+function updateAgentChoreography(d, sd, incidents) {
+  const signal = String(sd.signal || 'HOLD').toUpperCase();
+  const hasDirectionalSignal = signal === 'BUY' || signal === 'SELL';
+  const conf = Number(sd.ai_confidence || 0);
+  const spread = Number(sd.spread ?? 0);
+  const riskLock = d.risk_lock || 'OK';
+  const dd = Number(d.drawdown_pct || 0);
+  const openTrades = d.open_trades || [];
+  const journal = d.learning_journal || {};
+  const hasLearningItems = (journal.recent_failures || []).length > 0 || (journal.weak_regimes || []).length > 0;
+  const hasCritical = incidents.some(item => item.level === 'critical');
+  const hasWarning = incidents.some(item => item.level === 'warn');
+
+  setAgentTask(
+    'strategy',
+    hasDirectionalSignal ? 'signal' : 'scan',
+    hasDirectionalSignal ? `แผน ${thaiSignal(signal)}` : 'สแกน',
+    true
+  );
+
+  setAgentTask(
+    'ai',
+    hasLearningItems ? 'learn' : 'analyze',
+    hasLearningItems ? 'เรียนรู้' : (conf >= 60 ? 'คำนวณ' : 'อ่านข้อมูล'),
+    true
+  );
+
+  setAgentTask(
+    'risk',
+    riskLock !== 'OK' || dd >= 3 || spread >= 8 ? 'risk' : 'guard',
+    riskLock !== 'OK' ? 'ล็อกเสี่ยง' : (dd >= 3 ? 'คุม DD' : 'เฝ้าเสี่ยง'),
+    true
+  );
+
+  const execActive = openTrades.length > 0 || (hasDirectionalSignal && riskLock === 'OK');
+  setAgentTask(
+    'exec',
+    openTrades.length ? 'monitor' : (execActive ? 'execute' : 'idle'),
+    openTrades.length ? 'เฝ้าไม้' : (execActive ? 'เตรียมยิง' : 'รอคำสั่ง'),
+    execActive
+  );
+
+  setAgentTask(
+    'director',
+    hasCritical ? 'alert' : 'report',
+    hasCritical ? 'ป้องกัน' : (hasWarning ? 'ประชุม' : 'สรุปทีม'),
+    true
+  );
+
+  const room = $('office-room');
+  if (room) {
+    room.classList.toggle('mode-alert', hasCritical || riskLock !== 'OK' || dd >= 5);
+  }
+}
+
 function setBar(id, frac, color) {
   const el = $(id);
   if (!el) return;
@@ -1710,7 +1943,7 @@ function verdictColor(verdict) {
 
 function buildFallbackVotes(d, sd) {
   const riskLock = d.risk_lock || 'UNKNOWN';
-  const signal = sd.signal || 'HOLD';
+  const signal = String(sd.signal || 'HOLD').toUpperCase();
   const spread = Number(sd.spread ?? 0);
   const conf = Number(sd.ai_confidence ?? 0);
   const rrOk = d.open_trades?.length ? 'มีไม้เปิดอยู่' : 'ยังไม่มีคำสั่ง';
@@ -1754,7 +1987,7 @@ function renderOpsCenter(d) {
   const hasCommittee = committee && Object.keys(committee).length > 0;
   const riskLock = d.risk_lock || 'OK';
   const autonomy = d.autonomy || {};
-  const signal = sd.signal || 'HOLD';
+  const signal = String(sd.signal || 'HOLD').toUpperCase();
   const aiBias = sd.ai_bias || 'neutral';
   const conf = Number(sd.ai_confidence || 0);
   const dd = Number(d.drawdown_pct || 0);
@@ -1805,6 +2038,7 @@ function renderOpsCenter(d) {
   $('office-ai').textContent = `${thaiBias(aiBias)} ${conf}%`;
   $('office-exec').textContent = (d.open_trades || []).length ? 'มีไม้เปิดอยู่' : thaiAction(action);
   $('office-director').textContent = committeeText;
+  updateAgentChoreography(d, sd, incidents);
 
   const trace = [
     ['กลยุทธ์', thaiSignal(signal)],
