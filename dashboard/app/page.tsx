@@ -21,7 +21,13 @@ const EquityAreaChart = dynamic(() => import("../components/EquityAreaChart"), {
 
 interface SymbolTerminal {
   price: number;
+  bid?: number;
+  ask?: number;
   spread_pips: number;
+  spread_points?: number;
+  broker_symbol?: string;
+  live?: boolean;
+  tick_timestamp?: string;
   signal: string;
   rsi: number;
   rsi_label: string;
@@ -85,6 +91,18 @@ interface Stats {
   profit_factor: number;
 }
 
+interface LiveFeed {
+  connected: boolean;
+  source: "mt5" | "snapshot";
+  timestamp: string;
+  analysis_timestamp?: string;
+  account_login?: number;
+  server?: string;
+  currency?: string;
+  position_count?: number;
+  error?: string;
+}
+
 interface EquityPoint {
   ts: string;
   balance: number;
@@ -124,6 +142,8 @@ interface TradeState {
   stats: Stats;
   activity: ActivityEntry[];
   equity_recent: EquityPoint[];
+  floating_pnl?: number;
+  live?: LiveFeed;
   execution_controls?: ExecutionControls;
 }
 
@@ -136,9 +156,13 @@ function useTradeSocket(url: string) {
   const [connected, setConnected] = useState(false);
   const wsRef                     = useRef<WebSocket | null>(null);
   const retryRef                  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeRef                 = useRef(true);
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (
+      wsRef.current?.readyState === WebSocket.OPEN
+      || wsRef.current?.readyState === WebSocket.CONNECTING
+    ) return;
 
     const ws = new WebSocket(url);
     wsRef.current = ws;
@@ -146,7 +170,7 @@ function useTradeSocket(url: string) {
     ws.onopen  = () => { setConnected(true); };
     ws.onclose = () => {
       setConnected(false);
-      retryRef.current = setTimeout(connect, 3000);
+      if (activeRef.current) retryRef.current = setTimeout(connect, 3000);
     };
     ws.onerror = () => ws.close();
     ws.onmessage = (e) => {
@@ -155,8 +179,10 @@ function useTradeSocket(url: string) {
   }, [url]);
 
   useEffect(() => {
+    activeRef.current = true;
     connect();
     return () => {
+      activeRef.current = false;
       if (retryRef.current) clearTimeout(retryRef.current);
       wsRef.current?.close();
     };
@@ -253,6 +279,7 @@ function SymbolCard({ symbol, data }: { symbol: string; data: SymbolTerminal | u
     if (!data) return;
     if (prevPrice.current && data.price !== prevPrice.current) {
       setFlash(data.price > prevPrice.current ? "up" : "down");
+      prevPrice.current = data.price;
       const t = setTimeout(() => setFlash(null), 600);
       return () => clearTimeout(t);
     }
@@ -301,12 +328,20 @@ function SymbolCard({ symbol, data }: { symbol: string; data: SymbolTerminal | u
       </div>
 
       {/* Spread */}
-      <div className="flex items-center gap-3 mb-4 text-xs">
+      <div className="flex flex-wrap items-center gap-3 mb-4 text-xs">
+        {data.bid != null && data.ask != null && (
+          <span className="font-mono text-gray-400">
+            Bid {data.bid.toFixed(priceDecimals)} / Ask {data.ask.toFixed(priceDecimals)}
+          </span>
+        )}
         <span className="text-gray-500">Spread</span>
         <span className={`font-mono font-semibold ${
           data.spread_pips > 5 ? "text-red-400" : "text-emerald-400"
         }`}>
           {data.spread_pips.toFixed(1)} pips
+        </span>
+        <span className={data.live ? "text-emerald-500" : "text-yellow-500"}>
+          {data.live ? "MT5 LIVE" : "ANALYSIS"}
         </span>
         <span className="text-gray-600">ATR {data.atr.toFixed(isGold ? 2 : 5)}</span>
       </div>
@@ -894,6 +929,12 @@ export default function Dashboard() {
   const equityData = data?.equity_recent ?? [];
   const rawWinRate = stats?.win_rate ?? 0;
   const winRatePct = rawWinRate <= 1 ? rawWinRate * 100 : rawWinRate;
+  const mt5Live = connected && data?.live?.connected === true;
+  const feedLabel = !connected
+    ? "RECONNECTING..."
+    : mt5Live
+      ? "MT5 REALTIME"
+      : "SNAPSHOT MODE";
 
   const symbols = useMemo(() => {
     const configured = Object.keys(terminal);
@@ -924,12 +965,20 @@ export default function Dashboard() {
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${
-                connected ? "bg-emerald-400 animate-pulse" : "bg-red-500 animate-blink"
+                mt5Live
+                  ? "bg-emerald-400 animate-pulse"
+                  : connected
+                    ? "bg-yellow-500 animate-pulse"
+                    : "bg-red-500 animate-blink"
               }`} />
               <span className={`text-xs font-semibold ${
-                connected ? "text-emerald-400" : "text-red-400"
+                mt5Live
+                  ? "text-emerald-400"
+                  : connected
+                    ? "text-yellow-400"
+                    : "text-red-400"
               }`}>
-                {connected ? "ENGINE LIVE" : "RECONNECTING…"}
+                {feedLabel}
               </span>
             </div>
 
@@ -962,8 +1011,15 @@ export default function Dashboard() {
 
           {/* Right: Time */}
           <div className="flex items-center gap-3">
-            <div className="text-[10px] uppercase tracking-wider text-gray-600 hidden sm:block">
-              Server: Local
+            <div
+              className={`text-[10px] uppercase tracking-wider hidden sm:block ${
+                mt5Live ? "text-emerald-600" : "text-yellow-600"
+              }`}
+              title={data?.live?.error ?? ""}
+            >
+              {mt5Live
+                ? `${data?.live?.server || "MT5"} / ${data?.live?.currency || ""}`
+                : data?.live?.error || "Waiting for MT5"}
             </div>
             <LiveClock />
           </div>

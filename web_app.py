@@ -20,6 +20,8 @@ import asyncio
 import json
 import math
 import sqlite3
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
@@ -56,6 +58,10 @@ STATE_PATH     = Path("data/state.json")
 INSIGHTS_PATH  = Path("data/ai_insights.json")
 LEARN_PATH     = Path("data/learning_stats.json")
 BRAIN_DB_PATH  = Path("data/brain_memory.db")
+_MT5_LOCK = threading.Lock()
+_MT5_SYMBOL_CACHE: dict[str, str] = {}
+_LIVE_EQUITY_LOCK = threading.Lock()
+_LIVE_EQUITY_POINTS: list[dict] = []
 
 
 def _load_root_config() -> dict:
@@ -123,6 +129,277 @@ def _perf_from_profits(
         "total_profit": round(sum(profits), 2),
         "profit_factor": round(profit_factor, 3),
     }
+
+
+def _float_attr(value, name: str, default: float = 0.0) -> float:
+    try:
+        return float(getattr(value, name, default) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _resolve_live_symbol(mt5, configured_symbol: str):
+    actual = _MT5_SYMBOL_CACHE.get(configured_symbol)
+    if actual:
+        info = mt5.symbol_info(actual)
+        if info is not None:
+            return actual, info
+
+    info = mt5.symbol_info(configured_symbol)
+    if info is not None:
+        _MT5_SYMBOL_CACHE[configured_symbol] = configured_symbol
+        return configured_symbol, info
+
+    matches = mt5.symbols_get(group=f"*{configured_symbol}*") or ()
+    configured_upper = configured_symbol.upper()
+    actual = next(
+        (s.name for s in matches if s.name.upper().startswith(configured_upper)),
+        None,
+    ) or next(
+        (s.name for s in matches if configured_upper in s.name.upper()),
+        configured_symbol,
+    )
+    info = mt5.symbol_info(actual)
+    if info is not None:
+        _MT5_SYMBOL_CACHE[configured_symbol] = actual
+    return actual, info
+
+
+def _serialize_live_positions(mt5, positions, state: dict) -> list[dict]:
+    old_positions = state.get("open_positions") or state.get("open_trades") or []
+    old_by_ticket = {
+        int(item.get("ticket", 0)): dict(item)
+        for item in old_positions
+        if item.get("ticket") is not None
+    }
+    buy_type = getattr(mt5, "POSITION_TYPE_BUY", 0)
+    serialized = []
+
+    for position in positions:
+        ticket = int(getattr(position, "ticket", 0) or 0)
+        item = old_by_ticket.get(ticket, {})
+        item.update({
+            "ticket": ticket,
+            "symbol": str(getattr(position, "symbol", "")),
+            "direction": "BUY" if getattr(position, "type", -1) == buy_type else "SELL",
+            "lot": _float_attr(position, "volume"),
+            "lot_size": _float_attr(position, "volume"),
+            "open_price": _float_attr(position, "price_open"),
+            "entry_price": _float_attr(position, "price_open"),
+            "current_price": _float_attr(position, "price_current"),
+            "sl": _float_attr(position, "sl"),
+            "sl_price": _float_attr(position, "sl"),
+            "tp": _float_attr(position, "tp"),
+            "tp_price": _float_attr(position, "tp"),
+            "profit": round(_float_attr(position, "profit"), 2),
+            "swap": round(_float_attr(position, "swap"), 2),
+            "magic": int(getattr(position, "magic", 0) or 0),
+        })
+        serialized.append(item)
+
+    return serialized
+
+
+def _mt5_today_stats(mt5, positions) -> tuple[dict, float]:
+    start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    deals = mt5.history_deals_get(start, datetime.now()) or ()
+    trade_types = {
+        getattr(mt5, "DEAL_TYPE_BUY", 0),
+        getattr(mt5, "DEAL_TYPE_SELL", 1),
+    }
+    closing_entries = {
+        getattr(mt5, "DEAL_ENTRY_OUT", 1),
+        getattr(mt5, "DEAL_ENTRY_INOUT", 2),
+        getattr(mt5, "DEAL_ENTRY_OUT_BY", 3),
+    }
+    by_position: dict[int, dict] = {}
+    realized_today = 0.0
+
+    for deal in deals:
+        if getattr(deal, "type", None) not in trade_types:
+            continue
+        amount = sum(
+            _float_attr(deal, field)
+            for field in ("profit", "commission", "swap", "fee")
+        )
+        realized_today += amount
+        position_id = int(
+            getattr(deal, "position_id", 0)
+            or getattr(deal, "order", 0)
+            or getattr(deal, "ticket", 0)
+            or 0
+        )
+        group = by_position.setdefault(position_id, {"profit": 0.0, "closed": False})
+        group["profit"] += amount
+        if getattr(deal, "entry", None) in closing_entries:
+            group["closed"] = True
+
+    closed_profits = [
+        group["profit"] for group in by_position.values() if group["closed"]
+    ]
+    start_ts = start.timestamp()
+    open_today = sum(
+        1 for position in positions
+        if _float_attr(position, "time") >= start_ts
+    )
+    stats = _perf_from_profits(
+        closed_profits,
+        total_trades=len(closed_profits) + open_today,
+        open_trades_today=open_today,
+    )
+    stats["today_pnl"] = round(realized_today, 2)
+    stats["total_profit"] = round(realized_today, 2)
+    return stats, realized_today
+
+
+def _with_live_mt5(state: dict) -> dict:
+    """Overlay account, tick, and position data directly from the connected MT5."""
+    state = dict(state or {})
+    analysis_timestamp = state.get("timestamp")
+    now = datetime.now().astimezone()
+    live = {
+        "connected": False,
+        "source": "snapshot",
+        "timestamp": now.isoformat(timespec="milliseconds"),
+        "analysis_timestamp": analysis_timestamp,
+    }
+
+    try:
+        import MetaTrader5 as mt5
+    except ImportError:
+        live["error"] = "MetaTrader5 package is not installed"
+        state["live"] = live
+        return state
+
+    try:
+        with _MT5_LOCK:
+            account = mt5.account_info()
+            if account is None:
+                last_error = mt5.last_error() if hasattr(mt5, "last_error") else None
+                live["error"] = f"MT5 account unavailable: {last_error}"
+                state["live"] = live
+                return state
+
+            positions = list(mt5.positions_get() or ())
+            live_positions = _serialize_live_positions(mt5, positions, state)
+            today_stats, realized_today = _mt5_today_stats(mt5, positions)
+
+            terminal = {
+                symbol: dict(values)
+                for symbol, values in (state.get("terminal") or {}).items()
+            }
+            symbols = list(dict.fromkeys(
+                list(ROOT_CONFIG.get("trading", {}).get("symbols", []))
+                + list(terminal)
+            ))
+            symbols_summary = {
+                symbol: dict(values)
+                for symbol, values in (state.get("symbols") or {}).items()
+            }
+
+            for symbol in symbols:
+                actual, symbol_info = _resolve_live_symbol(mt5, symbol)
+                tick = mt5.symbol_info_tick(actual)
+                if tick is None:
+                    continue
+
+                bid = _float_attr(tick, "bid")
+                ask = _float_attr(tick, "ask")
+                point = _float_attr(symbol_info, "point") if symbol_info else 0.0
+                spread_points = (ask - bid) / point if point > 0 else 0.0
+                spread_pips = spread_points / 10
+                tick_msc = _float_attr(tick, "time_msc")
+                tick_timestamp = (
+                    datetime.fromtimestamp(tick_msc / 1000, timezone.utc).isoformat()
+                    if tick_msc > 0
+                    else now.astimezone(timezone.utc).isoformat()
+                )
+
+                terminal_item = terminal.setdefault(symbol, {})
+                terminal_item.update({
+                    "price": bid,
+                    "bid": bid,
+                    "ask": ask,
+                    "spread_pips": round(spread_pips, 1),
+                    "spread_points": round(spread_points, 1),
+                    "broker_symbol": actual,
+                    "live": True,
+                    "tick_timestamp": tick_timestamp,
+                    "updated": now.strftime("%H:%M:%S"),
+                })
+                summary_item = symbols_summary.setdefault(symbol, {})
+                summary_item.update({
+                    "close": bid,
+                    "bid": bid,
+                    "ask": ask,
+                    "spread": round(spread_pips, 1),
+                    "broker_symbol": actual,
+                })
+
+        floating_pnl = round(sum(item["profit"] for item in live_positions), 2)
+        balance = _float_attr(account, "balance")
+        equity = _float_attr(account, "equity")
+        old_stats = state.get("stats") or {}
+        today_stats["weekly_pnl"] = old_stats.get(
+            "weekly_pnl", state.get("weekly_pnl", 0.0)
+        )
+        peak_balance = max(
+            balance,
+            float(state.get("peak_balance") or balance or 0.0),
+        )
+
+        state.update({
+            "timestamp": now.isoformat(timespec="seconds"),
+            "balance": balance,
+            "equity": equity,
+            "peak_balance": peak_balance,
+            "margin": _float_attr(account, "margin"),
+            "margin_level": _float_attr(account, "margin_level"),
+            "free_margin": _float_attr(account, "margin_free"),
+            "terminal": terminal,
+            "symbols": symbols_summary,
+            "open_positions": live_positions,
+            "open_trades": live_positions,
+            "floating_pnl": floating_pnl,
+            "daily_pnl": round(realized_today + floating_pnl, 2),
+            "drawdown_pct": round(
+                max(0.0, (peak_balance - equity) / peak_balance * 100)
+                if peak_balance > 0 else 0.0,
+                2,
+            ),
+            "stats": today_stats,
+        })
+        live_equity_point = {
+            "ts": now.isoformat(timespec="seconds"),
+            "balance": balance,
+            "equity": equity,
+        }
+        with _LIVE_EQUITY_LOCK:
+            if (
+                _LIVE_EQUITY_POINTS
+                and _LIVE_EQUITY_POINTS[-1]["ts"] == live_equity_point["ts"]
+            ):
+                _LIVE_EQUITY_POINTS[-1] = live_equity_point
+            else:
+                _LIVE_EQUITY_POINTS.append(live_equity_point)
+                del _LIVE_EQUITY_POINTS[:-60]
+            live_equity_points = list(_LIVE_EQUITY_POINTS)
+
+        historical_equity = list(state.get("equity_recent") or [])
+        state["equity_recent"] = (historical_equity + live_equity_points)[-60:]
+        live.update({
+            "connected": True,
+            "source": "mt5",
+            "account_login": int(getattr(account, "login", 0) or 0),
+            "server": str(getattr(account, "server", "") or ""),
+            "currency": str(getattr(account, "currency", "") or ""),
+            "position_count": len(live_positions),
+        })
+    except Exception as exc:
+        live["error"] = f"MT5 live read failed: {exc}"
+
+    state["live"] = live
+    return state
 
 
 def _today_trade_stats() -> dict:
@@ -352,7 +629,7 @@ def _build_broadcast() -> dict:
     state['learning_stats'] = _read_json(LEARN_PATH)
     state['learning_journal'] = _build_learning_journal()
     state['execution_controls'] = CONTROL_STORE.get()
-    return _json_safe(state)
+    return _json_safe(_with_live_mt5(state))
 
 
 # ── WebSocket connection manager ───────────────────────────────────────────────
@@ -401,7 +678,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/api/state")
 def api_state():
-    return _json_response(_read_state())
+    return _json_response(_with_live_mt5(_read_state()))
 
 
 @app.get("/api/equity")
