@@ -91,6 +91,24 @@ interface EquityPoint {
   equity: number;
 }
 
+interface ExecutionGuardrails {
+  max_order_count: number;
+  max_lot_per_order: number;
+  max_total_lot_per_signal: number;
+}
+
+interface ExecutionControls {
+  trading_enabled: boolean;
+  order_count: number;
+  lot_mode: "risk_split" | "fixed_capped";
+  lot_per_order: number;
+  revision: number;
+  updated_at: string;
+  updated_by: string;
+  validation_error?: string;
+  guardrails: ExecutionGuardrails;
+}
+
 interface TradeState {
   timestamp: string;
   balance: number;
@@ -106,6 +124,7 @@ interface TradeState {
   stats: Stats;
   activity: ActivityEntry[];
   equity_recent: EquityPoint[];
+  execution_controls?: ExecutionControls;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -116,7 +135,7 @@ function useTradeSocket(url: string) {
   const [data, setData]           = useState<TradeState | null>(null);
   const [connected, setConnected] = useState(false);
   const wsRef                     = useRef<WebSocket | null>(null);
-  const retryRef                  = useRef<ReturnType<typeof setTimeout>>();
+  const retryRef                  = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -138,7 +157,7 @@ function useTradeSocket(url: string) {
   useEffect(() => {
     connect();
     return () => {
-      clearTimeout(retryRef.current);
+      if (retryRef.current) clearTimeout(retryRef.current);
       wsRef.current?.close();
     };
   }, [connect]);
@@ -558,6 +577,187 @@ function LogTerminal({ entries }: { entries: ActivityEntry[] }) {
   );
 }
 
+// ── Execution Controls ────────────────────────────────────────
+function ExecutionControlPanel({ live }: { live?: ExecutionControls }) {
+  const [controls, setControls] = useState<ExecutionControls | null>(null);
+  const [draft, setDraft] = useState<ExecutionControls | null>(null);
+  const [status, setStatus] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const adopt = useCallback((next: ExecutionControls) => {
+    setControls(next);
+    setDraft(next);
+  }, []);
+
+  const load = useCallback(async () => {
+    try {
+      const response = await fetch("/api/execution-controls", { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      adopt(await response.json());
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Control API unavailable");
+    }
+  }, [adopt]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!saving && live && (!controls || live.revision > controls.revision)) adopt(live);
+  }, [adopt, controls, live, saving]);
+
+  if (!draft) {
+    return (
+      <div className="card">
+        <div className="section-title">Execution Controls</div>
+        <div className="text-xs font-mono text-gray-600">Loading control plane...</div>
+      </div>
+    );
+  }
+
+  const guardrails = draft.guardrails;
+  const changed = controls != null && (
+    draft.trading_enabled !== controls.trading_enabled ||
+    draft.order_count !== controls.order_count ||
+    draft.lot_mode !== controls.lot_mode ||
+    draft.lot_per_order !== controls.lot_per_order
+  );
+  const setCount = (delta: number) => setDraft({
+    ...draft,
+    order_count: Math.max(1, Math.min(guardrails.max_order_count, draft.order_count + delta)),
+  });
+  const setLot = (delta: number) => setDraft({
+    ...draft,
+    lot_per_order: Math.max(
+      0.01,
+      Math.min(guardrails.max_lot_per_order, Number((draft.lot_per_order + delta).toFixed(2))),
+    ),
+  });
+  const persist = async (next: ExecutionControls) => {
+    setSaving(true);
+    setStatus("");
+    try {
+      const response = await fetch("/api/execution-controls", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "x-operator-id": "next-dashboard",
+        },
+        body: JSON.stringify({
+          trading_enabled: next.trading_enabled,
+          order_count: next.order_count,
+          lot_mode: next.lot_mode,
+          lot_per_order: next.lot_per_order,
+          expected_revision: controls?.revision ?? 0,
+        }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`);
+      adopt(body);
+      setStatus(`Applied revision ${body.revision}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Update failed");
+      await load();
+    } finally {
+      setSaving(false);
+    }
+  };
+  const apply = () => persist(draft);
+  const toggleEntries = () => {
+    const effective = controls ?? draft;
+    return persist({ ...effective, trading_enabled: !effective.trading_enabled });
+  };
+
+  return (
+    <div className={`card ${draft.trading_enabled ? "glow-green" : "glow-red"}`}>
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <div className="section-title !mb-0">Execution Controls</div>
+          <div className="text-[10px] text-gray-600 mt-1 font-mono">
+            Revision {draft.revision}
+          </div>
+        </div>
+        <button
+          disabled={saving}
+          onClick={toggleEntries}
+          className={`px-3 py-1.5 rounded-lg border text-[10px] font-bold tracking-wider ${
+            draft.trading_enabled
+              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+              : "border-red-500/50 bg-red-500/10 text-red-400"
+          } disabled:opacity-50`}
+        >
+          {saving
+            ? "UPDATING..."
+            : draft.trading_enabled
+              ? "NEW ENTRIES ARMED"
+              : "NEW ENTRIES DISABLED"}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div className="control-box">
+          <div className="control-label">Orders per signal</div>
+          <div className="flex items-center justify-between gap-2">
+            <button className="step-button" onClick={() => setCount(-1)}>-</button>
+            <span className="font-mono text-xl font-bold text-white">{draft.order_count}</span>
+            <button className="step-button" onClick={() => setCount(1)}>+</button>
+          </div>
+          <div className="control-hint">Hard max {guardrails.max_order_count}</div>
+        </div>
+
+        <div className="control-box">
+          <div className="control-label">Lot per order</div>
+          <div className="flex items-center justify-between gap-2">
+            <button className="step-button" onClick={() => setLot(-0.01)}>-</button>
+            <span className="font-mono text-xl font-bold text-white">
+              {draft.lot_per_order.toFixed(2)}
+            </span>
+            <button className="step-button" onClick={() => setLot(0.01)}>+</button>
+          </div>
+          <div className="control-hint">Hard max {guardrails.max_lot_per_order.toFixed(2)}</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 mt-2">
+        <button
+          onClick={() => setDraft({ ...draft, lot_mode: "risk_split" })}
+          className={`mode-button ${draft.lot_mode === "risk_split" ? "mode-button-active" : ""}`}
+        >
+          Risk Split
+          <span>Divide the approved risk budget</span>
+        </button>
+        <button
+          onClick={() => setDraft({ ...draft, lot_mode: "fixed_capped" })}
+          className={`mode-button ${draft.lot_mode === "fixed_capped" ? "mode-button-active" : ""}`}
+        >
+          Fixed Capped
+          <span>Use selected lot within risk budget</span>
+        </button>
+      </div>
+
+      <div className="mt-3 p-2 rounded-lg bg-[#07101d] border border-[#1e2d40] text-[10px] text-gray-500 leading-relaxed">
+        Operator settings cannot override risk sizing, open-risk cap, capacity,
+        Committee Guard, or broker preflight. Total lot hard cap:{" "}
+        {guardrails.max_total_lot_per_signal.toFixed(2)}.
+      </div>
+
+      {draft.validation_error && (
+        <div className="mt-2 text-[10px] text-red-400">{draft.validation_error}</div>
+      )}
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <span className={`text-[10px] font-mono ${status.includes("Applied") ? "text-emerald-400" : "text-gray-500"}`}>
+          {status || (changed ? "Unsaved control changes" : "Controls synchronized")}
+        </span>
+        <button
+          disabled={!changed || saving}
+          onClick={apply}
+          className="px-3 py-1.5 rounded-lg bg-blue-500/15 border border-blue-500/40 text-blue-300 text-[10px] font-bold disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          {saving ? "APPLYING..." : "APPLY CONTROLS"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Open Positions ────────────────────────────────────────────
 function OpenPositions({ positions }: { positions: Position[] }) {
   return (
@@ -692,8 +892,13 @@ export default function Dashboard() {
   const activity   = data?.activity   ?? [];
   const stats      = data?.stats;
   const equityData = data?.equity_recent ?? [];
+  const rawWinRate = stats?.win_rate ?? 0;
+  const winRatePct = rawWinRate <= 1 ? rawWinRate * 100 : rawWinRate;
 
-  const symbols = ["XAUUSD", "EURUSD"];
+  const symbols = useMemo(() => {
+    const configured = Object.keys(terminal);
+    return configured.length > 0 ? configured : ["XAUUSD"];
+  }, [terminal]);
 
   return (
     <div className="min-h-screen bg-[#050a14] text-gray-100">
@@ -790,8 +995,8 @@ export default function Dashboard() {
           />
           <KpiCard
             label="Win Rate" icon="🎯"
-            value={`${fmt(stats?.win_rate ?? 0, 1)}%`}
-            color={(stats?.win_rate ?? 0) >= 50 ? "text-emerald-400" : "text-yellow-400"}
+            value={`${fmt(winRatePct, 1)}%`}
+            color={winRatePct >= 50 ? "text-emerald-400" : "text-yellow-400"}
           />
           <KpiCard
             label="Profit Factor" icon="⚡"
@@ -848,6 +1053,8 @@ export default function Dashboard() {
 
           {/* ── RIGHT ────────────────────────────────── col 10-12 */}
           <div className="col-span-12 lg:col-span-3 flex flex-col gap-3">
+
+            <ExecutionControlPanel live={data?.execution_controls} />
 
             {/* Log Terminal */}
             <div style={{ height: "460px" }}>

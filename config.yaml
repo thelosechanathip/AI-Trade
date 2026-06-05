@@ -8,33 +8,35 @@ trading:
   magic_number: 20240101
 
 risk:
-  risk_per_trade: 0.035
+  risk_per_trade: 0.005
+  risk_per_trade_hard_cap: 0.005
+  max_total_open_risk: 0.015
+  min_margin_level: 300
   max_concurrent_trades: 4
-  max_per_direction: 3
-  max_daily_loss: 0.08
-  max_weekly_loss: 0.16
-  max_drawdown: 0.25
-  min_rr_ratio: 1.2
-  atr_sl_multiplier: 1.15
-  atr_tp_multiplier: 4.6
+  max_per_direction: 4
+  max_daily_loss: 0.03
+  max_weekly_loss: 0.06
+  max_drawdown: 0.10
+  min_rr_ratio: 1.8
+  atr_sl_multiplier: 1.8
+  atr_tp_multiplier: 3.6
   use_kelly: true
-  kelly_max_fraction: 0.060
-  dd_scale_start: 0.10
-  dd_scale_min: 0.55
-  max_loss_streak: 5
-  loss_streak_scale: 0.75
-  mode: "aggressive"
+  kelly_min_trades: 250
+  kelly_max_fraction: 0.010
+  dd_scale_start: 0.03
+  dd_scale_min: 0.25
+  max_loss_streak: 3
+  loss_streak_scale: 0.50
+  mode: "normal"
   safe_risk_multiplier: 0.50
-  aggressive_risk_multiplier: 1.55
+  aggressive_risk_multiplier: 1.25
   adaptive_cooldown:
     enabled: true
     hours_map:
-      1: 0
-      2: 0.5
-      3: 1
-      4: 3
-      5: 8
-    halt_at_streak: 6
+      1: 1
+      2: 4
+      3: 12
+    halt_at_streak: 4
 
 strategy:
   ema_fast: 50
@@ -92,20 +94,20 @@ optimizer:
   interval_cycles: 3
 
 entry_filters:
-  signal_stability_cycles: 1
-  signal_stability_window: 4
-  noise_threshold: 0.74
-  chase_threshold: 0.74
-  grade_a_plus_score: 0.62
-  grade_a_score: 0.48
-  grade_b_score: 0.34
-  grade_a_scale: 0.95
-  grade_b_scale: 0.85
-  conf_full_score: 0.58
-  conf_mid_score: 0.46
-  conf_low_score: 0.34
-  conf_mid_scale: 0.95
-  conf_low_scale: 0.85
+  signal_stability_cycles: 2
+  signal_stability_window: 5
+  noise_threshold: 0.60
+  chase_threshold: 0.60
+  grade_a_plus_score: 0.70
+  grade_a_score: 0.58
+  grade_b_score: 0.45
+  grade_a_scale: 0.90
+  grade_b_scale: 0.75
+  conf_full_score: 0.70
+  conf_mid_score: 0.58
+  conf_low_score: 0.45
+  conf_mid_scale: 0.85
+  conf_low_scale: 0.70
 
 trade_management:
   breakeven_r: 1.0
@@ -124,20 +126,28 @@ trade_management:
   time_exit_enabled: true
   time_exit_bars: 28
   time_exit_min_r: -0.35
-  cooldown_minutes: 8
-  recent_loss_penalty_minutes: 8
-  recent_loss_penalty_score: 0.02
+  cooldown_minutes: 90
+  recent_loss_penalty_minutes: 45
+  recent_loss_penalty_score: 0.06
   news_filter_enabled: true
-  news_blackout_before: 8
-  news_blackout_after: 3
+  news_blackout_before: 30
+  news_blackout_after: 15
   min_sl_points: 6.0
-  max_spread_gold: 28.0
+  max_spread_gold: 10.0
   max_spread_forex: 10.0
 
 execution:
   max_retries: 3
   retry_delay: 1
   deviation: 30
+
+execution_controls:
+  default_order_count: 1
+  default_lot_mode: "risk_split"
+  default_lot_per_order: 0.01
+  max_order_count: 4
+  max_lot_per_order: 0.05
+  max_total_lot_per_signal: 0.12
 
 htf_filter:
   enabled: true
@@ -172,18 +182,19 @@ market_intelligence:
 
 dashboard:
   refresh_interval: 5
-  port: 8001
+  port: 8000
+  control_api_key: ""
 
 progressive_autonomy:
   enabled: true
   initial_level: 1
   max_level: 3
   risk_scales:
-    0: 0.90
-    1: 1.00
-    2: 1.10
-    3: 1.15
-    4: 1.20
+    0: 0.60
+    1: 0.70
+    2: 0.80
+    3: 0.90
+    4: 1.00
   bootstrap_weights:
     0: 0.85
     1: 0.60
@@ -191,11 +202,11 @@ progressive_autonomy:
     3: 0.20
     4: 0.00
   min_score_thresholds:
-    0: 0.12
-    1: 0.16
-    2: 0.22
-    3: 0.28
-    4: 0.32
+    0: 0.35
+    1: 0.42
+    2: 0.50
+    3: 0.58
+    4: 0.64
 
 learning_analytics:
   enabled: true
@@ -207,19 +218,19 @@ learning_analytics:
 committee_guard:
   enabled: true
   fail_closed: true
-  min_score: 0.50
-  min_score_safe: 0.66
+  min_score: 0.62
+  min_score_safe: 0.74
   min_agent_approvals: 3
-  min_adjusted_score: 0.34
-  max_uncertainty: 0.86
-  max_reversal_probability: 0.84
-  max_noise_score: 0.72
-  max_chase_score: 0.72
-  max_spread_atr_ratio: 0.16
-  warning_spread_atr_ratio: 0.12
-  htf_conflict_strength: 0.70
-  blocked_regimes: ["EXHAUSTION"]
-  caution_regimes: ["HIGH_VOL", "RANGE", "REVERSAL", "LIQUIDITY_GRAB", "ACCUMULATION", "DISTRIBUTION"]
+  min_adjusted_score: 0.45
+  max_uncertainty: 0.72
+  max_reversal_probability: 0.70
+  max_noise_score: 0.58
+  max_chase_score: 0.58
+  max_spread_atr_ratio: 0.10
+  warning_spread_atr_ratio: 0.07
+  htf_conflict_strength: 0.55
+  blocked_regimes: ["HIGH_VOL", "EXHAUSTION"]
+  caution_regimes: ["RANGE", "REVERSAL", "LIQUIDITY_GRAB", "ACCUMULATION", "DISTRIBUTION"]
 
 logging:
   level: "DEBUG"

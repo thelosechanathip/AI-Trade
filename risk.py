@@ -13,6 +13,7 @@ Enhancements:
 
 import json
 import logging
+import math
 import time
 from datetime import date, datetime
 from pathlib import Path
@@ -339,6 +340,7 @@ class RiskManager:
         win_rate: Optional[float] = None,
         avg_win:  Optional[float] = None,
         avg_loss: Optional[float] = None,
+        sample_count: Optional[int] = None,
     ) -> float:
         """
         Compute lot size with Kelly + drawdown + streak scaling.
@@ -347,34 +349,61 @@ class RiskManager:
         otherwise falls back to risk_per_trade × risk_multiplier.
         """
         use_kelly = self._cfg.get('use_kelly', True)
+        kelly_ready = (
+            use_kelly
+            and int(sample_count or 0) >= int(self._cfg.get('kelly_min_trades', 250))
+            and bool(win_rate)
+            and bool(avg_win)
+            and bool(avg_loss)
+        )
 
-        if use_kelly and win_rate and avg_win and avg_loss:
+        if kelly_ready:
             base_risk = self._kelly_fraction(win_rate, avg_win, avg_loss)
         else:
             base_risk = self._cfg['risk_per_trade']
 
-        risk_amt = balance * base_risk * self.risk_multiplier(balance)
+        hard_cap = float(self._cfg.get('risk_per_trade_hard_cap', 0.01))
+        base_risk = max(0.0, min(float(base_risk), hard_cap))
+        effective_risk = min(base_risk * self.risk_multiplier(balance), hard_cap)
+        risk_amt = balance * effective_risk
 
-        tick_size  = float(symbol_info.trade_tick_size)
-        tick_value = float(symbol_info.trade_tick_value)
-        vol_step   = float(symbol_info.volume_step)
-        vol_min    = float(symbol_info.volume_min)
-        vol_max    = float(symbol_info.volume_max)
+        try:
+            tick_size  = float(symbol_info.trade_tick_size)
+            tick_value = float(symbol_info.trade_tick_value)
+            vol_step   = float(symbol_info.volume_step)
+            vol_min    = float(symbol_info.volume_min)
+            vol_max    = float(symbol_info.volume_max)
+        except (AttributeError, TypeError, ValueError) as exc:
+            logger.warning(f"calculate_lot_size: symbol metadata unavailable: {exc}")
+            return 0.0
 
-        if tick_size <= 0 or tick_value <= 0 or sl_distance <= 0:
+        if (
+            tick_size <= 0
+            or tick_value <= 0
+            or vol_step <= 0
+            or vol_min <= 0
+            or vol_max < vol_min
+            or sl_distance <= 0
+        ):
             logger.warning(
                 f"calculate_lot_size: invalid inputs "
                 f"(sl={sl_distance}, tick_size={tick_size}, tick_value={tick_value}). "
-                "Returning minimum lot."
+                "Failing closed with zero lot."
             )
-            return vol_min
+            return 0.0
 
         sl_ticks      = sl_distance / tick_size
         value_per_lot = sl_ticks * tick_value
 
         raw_lot = risk_amt / value_per_lot
         lot     = (raw_lot // vol_step) * vol_step
-        lot     = max(vol_min, min(vol_max, lot))
+        if not math.isfinite(lot) or lot < vol_min:
+            logger.info(
+                f"Lot calc blocked | raw_lot={raw_lot:.6f} below broker minimum "
+                f"{vol_min:.4f}"
+            )
+            return 0.0
+        lot = min(vol_max, lot)
 
         logger.info(
             f"Lot calc | balance={balance:.2f}  risk_amt={risk_amt:.2f}  "
@@ -382,6 +411,21 @@ class RiskManager:
             f"mult={self.risk_multiplier(balance):.2f}  lot={lot:.2f}"
         )
         return round(lot, 2)
+
+    @staticmethod
+    def estimate_risk_amount(lot_size: float, sl_distance: float, symbol_info) -> float:
+        """Return the cash-at-stop for a lot size, or infinity when unverifiable."""
+        try:
+            tick_size = float(symbol_info.trade_tick_size)
+            tick_value = float(symbol_info.trade_tick_value)
+            lot = float(lot_size)
+            distance = float(sl_distance)
+        except (AttributeError, TypeError, ValueError):
+            return float('inf')
+        if tick_size <= 0 or tick_value <= 0 or lot <= 0 or distance <= 0:
+            return float('inf')
+        amount = (distance / tick_size) * tick_value * lot
+        return amount if math.isfinite(amount) and amount > 0 else float('inf')
 
     # ── Metrics ───────────────────────────────────────────────────────────────
 

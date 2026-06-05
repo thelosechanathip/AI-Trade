@@ -11,6 +11,7 @@ Key improvements over naive initialize():
 """
 
 import logging
+import math
 import time
 from typing import Dict, List, Optional
 
@@ -256,6 +257,50 @@ class MT5Executor:
 
     # ── Order placement ───────────────────────────────────────────────────────
 
+    @staticmethod
+    def _normalize_volume(volume: float, sym_info) -> float:
+        """Round volume down to broker step and reject anything below minimum."""
+        try:
+            step = float(sym_info.volume_step)
+            vol_min = float(sym_info.volume_min)
+            vol_max = float(sym_info.volume_max)
+            requested = float(volume)
+        except (AttributeError, TypeError, ValueError):
+            return 0.0
+        if step <= 0 or vol_min <= 0 or vol_max < vol_min or requested <= 0:
+            return 0.0
+        normalized = math.floor((min(requested, vol_max) + 1e-12) / step) * step
+        if normalized + 1e-12 < vol_min:
+            return 0.0
+        return round(normalized, 8)
+
+    @staticmethod
+    def _valid_protective_prices(
+        is_buy: bool,
+        price: float,
+        sl_price: float,
+        tp_price: float,
+        sym_info,
+    ) -> bool:
+        """Fail closed when SL/TP are missing, inverted, or inside broker stops level."""
+        values = (price, sl_price, tp_price)
+        if any(not math.isfinite(float(v)) or float(v) <= 0 for v in values):
+            return False
+        if is_buy and not (sl_price < price < tp_price):
+            return False
+        if not is_buy and not (tp_price < price < sl_price):
+            return False
+
+        point = float(getattr(sym_info, 'point', 0.0) or 0.0)
+        stops_level = float(getattr(sym_info, 'trade_stops_level', 0.0) or 0.0)
+        min_distance = point * stops_level
+        if min_distance > 0:
+            if abs(price - sl_price) + 1e-12 < min_distance:
+                return False
+            if abs(tp_price - price) + 1e-12 < min_distance:
+                return False
+        return True
+
     def place_market_order(
         self,
         symbol: str,
@@ -266,12 +311,23 @@ class MT5Executor:
         magic: int,
         comment: str = '',
     ) -> Optional[Dict]:
-        real       = self._actual(symbol)
-        is_buy     = direction.upper() == 'BUY'
+        real = self._actual(symbol)
+        direction = direction.upper()
+        if direction not in ('BUY', 'SELL'):
+            logger.error(f"{real}: invalid order direction '{direction}'")
+            return None
+        is_buy     = direction == 'BUY'
         order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
         filling    = self._resolve_filling(symbol)
         sym_info   = mt5.symbol_info(real)
-        digits     = sym_info.digits if sym_info else 5
+        if sym_info is None:
+            logger.error(f"{real}: symbol_info unavailable before order")
+            return None
+        lot_size = self._normalize_volume(lot_size, sym_info)
+        if lot_size <= 0:
+            logger.error(f"{real}: invalid or below-minimum order volume")
+            return None
+        digits     = sym_info.digits
         deviation  = self._exec_cfg['deviation']
 
         def _price() -> float:
@@ -284,6 +340,14 @@ class MT5Executor:
                 logger.error(f"{real}: cannot get tick (attempt {attempt})")
                 time.sleep(self._exec_cfg['retry_delay'])
                 continue
+            if not self._valid_protective_prices(
+                is_buy, price, sl_price, tp_price, sym_info
+            ):
+                logger.error(
+                    f"{real}: rejected unsafe protective prices | "
+                    f"direction={direction} price={price} sl={sl_price} tp={tp_price}"
+                )
+                return None
 
             request = {
                 'action':       mt5.TRADE_ACTION_DEAL,
@@ -299,6 +363,20 @@ class MT5Executor:
                 'type_time':    mt5.ORDER_TIME_GTC,
                 'type_filling': filling,
             }
+
+            check = mt5.order_check(request)
+            accepted_checks = {
+                0,
+                getattr(mt5, 'TRADE_RETCODE_DONE', 10009),
+                getattr(mt5, 'TRADE_RETCODE_PLACED', 10008),
+            }
+            if check is None or getattr(check, 'retcode', -1) not in accepted_checks:
+                logger.error(
+                    f"{real}: order_check rejected request | "
+                    f"retcode={getattr(check, 'retcode', 'None')} "
+                    f"comment='{getattr(check, 'comment', mt5.last_error())}'"
+                )
+                return None
 
             result = mt5.order_send(request)
 

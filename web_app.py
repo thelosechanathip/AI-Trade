@@ -23,10 +23,16 @@ import sqlite3
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import yaml
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from execution_controls import (
+    ExecutionControlConflict,
+    ExecutionControlError,
+    ExecutionControlStore,
+)
 
 app = FastAPI(title="AI-Trade Dashboard", docs_url=None, redoc_url=None)
 ASSETS_DIR = Path("static/assets")
@@ -35,7 +41,12 @@ if ASSETS_DIR.exists():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -45,6 +56,17 @@ STATE_PATH     = Path("data/state.json")
 INSIGHTS_PATH  = Path("data/ai_insights.json")
 LEARN_PATH     = Path("data/learning_stats.json")
 BRAIN_DB_PATH  = Path("data/brain_memory.db")
+
+
+def _load_root_config() -> dict:
+    try:
+        return yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+
+
+ROOT_CONFIG = _load_root_config()
+CONTROL_STORE = ExecutionControlStore(ROOT_CONFIG)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -329,6 +351,7 @@ def _build_broadcast() -> dict:
     state['ai_insights']    = _read_json(INSIGHTS_PATH)
     state['learning_stats'] = _read_json(LEARN_PATH)
     state['learning_journal'] = _build_learning_journal()
+    state['execution_controls'] = CONTROL_STORE.get()
     return _json_safe(state)
 
 
@@ -435,6 +458,33 @@ def api_learning_stats():
 def api_learning_journal():
     """Readable post-loss memory and strategy-adjustment notes."""
     return _json_response(_build_learning_journal())
+
+
+@app.get("/api/execution-controls")
+def api_execution_controls():
+    """Return live operator controls plus server-enforced guardrails."""
+    return _json_response(CONTROL_STORE.get())
+
+
+@app.put("/api/execution-controls")
+def api_update_execution_controls(payload: dict, request: Request):
+    """Update operator controls from localhost with optimistic revision checks."""
+    host = request.client.host if request.client else ""
+    local_hosts = {"127.0.0.1", "::1", "localhost", "testclient"}
+    configured_key = str(
+        ROOT_CONFIG.get("dashboard", {}).get("control_api_key", "") or ""
+    )
+    supplied_key = request.headers.get("x-control-key", "")
+    if host not in local_hosts and (not configured_key or supplied_key != configured_key):
+        raise HTTPException(status_code=403, detail="control writes require localhost or API key")
+
+    actor = request.headers.get("x-operator-id") or host or "dashboard"
+    try:
+        return _json_response(CONTROL_STORE.update(payload, actor=actor))
+    except ExecutionControlConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ExecutionControlError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 # ── Legacy HTML dashboard (static) ────────────────────────────────────────────

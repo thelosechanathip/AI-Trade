@@ -1,12 +1,12 @@
 """
 run.py -- Single entry point.
 
-    python run.py            # starts backend + trading engine
-    python run.py --ui       # also launches Next.js dashboard (npm run dev)
+    python run.py            # starts backend + dashboard + trading engine
+    python run.py --no-ui    # starts backend + trading engine only
 
 Services:
   Backend API + WebSocket  -> http://localhost:8000   (FastAPI, background thread)
-  Next.js Dashboard        -> http://localhost:3000   (if --ui flag or Node installed)
+  Next.js Dashboard        -> http://localhost:3000   (default; disable with --no-ui)
   Trading Engine           ->                         (main thread, 60s cycle)
 """
 
@@ -83,7 +83,7 @@ def _start_nextjs(dashboard_dir: str) -> subprocess.Popen | None:
 
 
 def main() -> None:
-    launch_ui = "--ui" in sys.argv
+    launch_ui = "--no-ui" not in sys.argv
 
     # ── Load config ───────────────────────────────────────────────────
     try:

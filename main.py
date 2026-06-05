@@ -26,6 +26,7 @@ import sys
 import time
 import json
 import logging
+import math
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -54,6 +55,7 @@ from anti_chase           import AntiChaseEngine
 from context_persistence  import ContextPersistenceEngine
 from strategy_versioning  import StrategyVersionManager
 from committee_guard      import InvestmentCommitteeGuard
+from execution_controls   import ExecutionControlStore, build_order_plan
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -147,6 +149,7 @@ class TradingEngine:
             ema_alpha=0.20, flip_threshold=0.72, min_cycles_before_flip=3
         )
         self.committee_guard      = InvestmentCommitteeGuard(self.config)
+        self.execution_controls   = ExecutionControlStore(self.config)
 
         self.running              = False
         self._ai_last_train_ts    = 0.0
@@ -158,6 +161,7 @@ class TradingEngine:
         self._ticket_brain: dict       = {}            # ticket -> BrainDecision
         self._ticket_committee: dict   = {}            # ticket -> CommitteeVerdict
         self._ticket_entry_bar: dict   = {}            # ticket -> bar count at entry
+        self._account_margin_level: float = 0.0
         # direction_ban: symbol -> {'direction': 'BUY'|'SELL', 'until': float}
         self._direction_ban: dict = {}
         # per-symbol consecutive losses per direction: symbol -> {'BUY': int, 'SELL': int}
@@ -350,10 +354,62 @@ class TradingEngine:
             if step <= 0:
                 return round(raw, 2)
             scaled = (raw // step) * step
-            scaled = max(vol_min, min(vol_max, scaled))
+            if scaled < vol_min:
+                return 0.0
+            scaled = min(vol_max, scaled)
             return round(scaled, 2)
         except Exception:
             return round(raw, 2)
+
+    def _portfolio_open_risk(self, positions: list) -> float:
+        """Estimate cash-at-stop for strategy positions; fail closed if unverifiable."""
+        total = 0.0
+        for pos in positions:
+            sl_price = float(getattr(pos, 'sl', 0.0) or 0.0)
+            entry_price = float(getattr(pos, 'price_open', 0.0) or 0.0)
+            if sl_price <= 0 or entry_price <= 0:
+                return float('inf')
+            symbol = self.executor.canonical_symbol(str(getattr(pos, 'symbol', '')))
+            symbol_info = self.executor.get_symbol_info(symbol)
+            amount = self.risk.estimate_risk_amount(
+                float(getattr(pos, 'volume', 0.0) or 0.0),
+                abs(entry_price - sl_price),
+                symbol_info,
+            )
+            if not math.isfinite(amount):
+                return float('inf')
+            total += amount
+        return total
+
+    def _cap_lot_to_portfolio_risk(
+        self,
+        lot_size: float,
+        equity: float,
+        sl_distance: float,
+        symbol_info,
+        positions: list,
+    ) -> float:
+        """Cap aggregate new-entry lot so total open cash-at-stop stays bounded."""
+        max_fraction = float(self.config['risk'].get('max_total_open_risk', 0.03))
+        max_amount = max(0.0, float(equity)) * max_fraction
+        open_amount = self._portfolio_open_risk(positions)
+        per_lot_amount = self.risk.estimate_risk_amount(1.0, sl_distance, symbol_info)
+        if (
+            max_amount <= 0
+            or not math.isfinite(open_amount)
+            or not math.isfinite(per_lot_amount)
+            or per_lot_amount <= 0
+        ):
+            return 0.0
+        remaining = max(0.0, max_amount - open_amount)
+        risk_cap_lot = remaining / per_lot_amount
+        if risk_cap_lot >= lot_size:
+            return lot_size
+        return self._scale_lot_to_symbol(
+            lot_size,
+            risk_cap_lot / max(float(lot_size), 1e-12),
+            symbol_info,
+        )
 
     # ── News blackout filter ──────────────────────────────────────────────────
 
@@ -721,6 +777,22 @@ class TradingEngine:
             symbol, df, _sig_preview, _atr_preview,
             _ai_bias_p, _ai_conf_p, _regime_preview,
         )
+        controls = self.execution_controls.get()
+        if symbol in self._terminal:
+            self._terminal[symbol]['execution_controls_revision'] = controls['revision']
+        if not controls.get('trading_enabled', False):
+            self.logger.info(f"{symbol}: operator control has disabled new entries")
+            return
+        min_margin_level = float(cfg['risk'].get('min_margin_level', 300.0))
+        if (
+            self._account_margin_level > 0
+            and self._account_margin_level < min_margin_level
+        ):
+            self.logger.warning(
+                f"{symbol}: margin level {self._account_margin_level:.1f}% below "
+                f"minimum {min_margin_level:.1f}%"
+            )
+            return
         # Fetch HTF bias early so we can pass it to the preview signal too
         # (actual signal uses it below after all risk checks pass)
 
@@ -1233,8 +1305,9 @@ class TradingEngine:
         lot_size = self.risk.calculate_lot_size(
             balance, sl_dist, sym_info,
             win_rate = stats.get('win_rate') or None,
-            avg_win  = (stats.get('total_profit', 0) / max(1, int(stats.get('win_rate', 0) / 100 * stats.get('total_trades', 1)))) if stats.get('win_rate') else None,
-            avg_loss = None,
+            avg_win  = stats.get('avg_win') or None,
+            avg_loss = stats.get('avg_loss') or None,
+            sample_count = stats.get('total_trades', 0),
         )
         # Apply direction penalty scale (streak-based lot reduction)
         dir_scale = self._get_direction_lot_scale(symbol, signal)
@@ -1260,6 +1333,26 @@ class TradingEngine:
                 f"{symbol}: lot scaled cold={cold_scale:.2f} "
                 f"conf={conf_scale:.2f} grade={grade_scale:.2f} → {lot_size:.2f}"
             )
+        if lot_size <= 0:
+            log_activity(symbol, "Risk sizing blocked: lot budget below broker minimum", 'warning')
+            return
+
+        portfolio_lot = self._cap_lot_to_portfolio_risk(
+            lot_size, balance, sl_dist, sym_info, all_positions
+        )
+        if portfolio_lot <= 0:
+            log_activity(
+                symbol,
+                "Portfolio risk cap reached or open risk cannot be verified",
+                'warning',
+            )
+            return
+        if portfolio_lot < lot_size:
+            self.logger.info(
+                f"{symbol}: portfolio risk cap reduced lot {lot_size:.2f} -> "
+                f"{portfolio_lot:.2f}"
+            )
+            lot_size = portfolio_lot
 
         # Final institutional committee gate before live execution.
         committee = self.committee_guard.review(
@@ -1281,7 +1374,7 @@ class TradingEngine:
             spread_price    = spread_pts,
             rr              = rr,
             lot_size        = lot_size,
-            open_count      = open_count,
+            open_count      = len(all_positions),
             max_trades      = cfg['risk']['max_concurrent_trades'],
             noise_score     = noise.noise_score,
             chase_score     = chase.chase_score,
@@ -1313,49 +1406,81 @@ class TradingEngine:
                 f"{committee.risk_multiplier:.2f} | lot {old_lot:.2f} -> {lot_size:.2f}"
             )
 
-        # ── 11. Execute ───────────────────────────────────────────────────────
-        result = self.executor.place_market_order(
-            symbol    = symbol,
-            direction = signal,
-            lot_size  = lot_size,
-            sl_price  = sl_price,
-            tp_price  = tp_price,
-            magic     = magic,
-            comment   = f"AI-Trade|{signal}|{ai_confidence}%|C{int(committee.score * 100)}",
+        # ── 11. Execute guarded batch plan ────────────────────────────────────
+        controls = self.execution_controls.get()
+        global_capacity = max(
+            0, int(cfg['risk']['max_concurrent_trades']) - len(all_positions)
         )
-
-        if result:
-            self._last_trade_ts[symbol] = time.time()   # start cooldown
-            self._save_trade_guard_state()
-            # Reset stability tracker: the signal was consumed — next entry needs fresh confirmation
-            self.signal_stability.reset(symbol)
+        direction_capacity = max(0, int(max_per_dir) - len(same_dir_pos))
+        capacity = min(global_capacity, direction_capacity)
+        order_plan = build_order_plan(lot_size, controls, sym_info, capacity)
+        if not order_plan:
             log_activity(
                 symbol,
-                f"ส่งคำสั่ง {signal} @ {result['price']:.5f} | Lot={lot_size:.2f} | "
-                f"SL={sl_price:.5f} TP={tp_price:.5f} | H4={htf_bias}",
-                'order',
+                "Execution plan blocked by operator controls, capacity, or lot guardrails",
+                'warning',
             )
-            self._known_tickets.add(result['ticket'])
-            self._ticket_direction[result['ticket']]  = signal
-            self._ticket_confidence[result['ticket']] = ai_confidence
-            self._ticket_brain[result['ticket']]      = brain_decision
-            self._ticket_committee[result['ticket']]  = committee
-            self._ticket_entry_bar[result['ticket']]  = len(df)
-            # Store entry features for trade-outcome feedback learning
-            self.ai.record_trade_entry(result['ticket'], df, signal)
-            # Record to Brain memory
+            return
+
+        plan_total = round(sum(order_plan), 8)
+        if symbol in self._terminal:
+            self._terminal[symbol]['execution_plan'] = {
+                'controls_revision': controls['revision'],
+                'lot_mode': controls['lot_mode'],
+                'requested_orders': controls['order_count'],
+                'planned_orders': len(order_plan),
+                'lots': order_plan,
+                'total_lot': plan_total,
+            }
+        self.logger.info(
+            f"{symbol}: execution plan rev={controls['revision']} "
+            f"mode={controls['lot_mode']} orders={len(order_plan)} "
+            f"lots={order_plan} total={plan_total:.2f}"
+        )
+
+        results = []
+        entry_spread = spread_pts / (sym_info.point * 10) if sym_info.point > 0 else 0.0
+        for index, order_lot in enumerate(order_plan, start=1):
+            result = self.executor.place_market_order(
+                symbol    = symbol,
+                direction = signal,
+                lot_size  = order_lot,
+                sl_price  = sl_price,
+                tp_price  = tp_price,
+                magic     = magic,
+                comment   = (
+                    f"AI|{signal}|B{index}/{len(order_plan)}|"
+                    f"C{int(committee.score * 100)}"
+                ),
+            )
+            if not result:
+                log_activity(
+                    symbol,
+                    f"Batch stopped after {len(results)}/{len(order_plan)} orders",
+                    'warning',
+                )
+                break
+
+            results.append(result)
+            ticket = result['ticket']
+            self._known_tickets.add(ticket)
+            self._ticket_direction[ticket]  = signal
+            self._ticket_confidence[ticket] = ai_confidence
+            self._ticket_brain[ticket]      = brain_decision
+            self._ticket_committee[ticket]  = committee
+            self._ticket_entry_bar[ticket]  = len(df)
+            self.ai.record_trade_entry(ticket, df, signal)
             try:
                 self.brain_memory.record_trade_open(
-                    result['ticket'], brain_decision, result['price'], symbol
+                    ticket, brain_decision, result['price'], symbol
                 )
             except Exception:
                 pass
-            entry_spread = spread_pts / (sym_info.point * 10) if sym_info.point > 0 else 0.0
             insert_trade({
-                'ticket':        result['ticket'],
+                'ticket':        ticket,
                 'symbol':        symbol,
                 'direction':     signal,
-                'lot_size':      lot_size,
+                'lot_size':      order_lot,
                 'entry_price':   result['price'],
                 'sl_price':      sl_price,
                 'tp_price':      tp_price,
@@ -1369,6 +1494,18 @@ class TradingEngine:
                 'committee_score':   round(committee.score, 4),
                 'committee_risk_multiplier': round(committee.risk_multiplier, 4),
             })
+
+        if results:
+            self._last_trade_ts[symbol] = time.time()
+            self._save_trade_guard_state()
+            self.signal_stability.reset(symbol)
+            actual_total = sum(float(r['lot_size']) for r in results)
+            log_activity(
+                symbol,
+                f"Batch {signal}: {len(results)}/{len(order_plan)} orders | "
+                f"total lot={actual_total:.2f} | SL={sl_price:.5f} TP={tp_price:.5f}",
+                'order',
+            )
 
     # ── Progressive autonomy level management ────────────────────────────────
 
@@ -1740,14 +1877,18 @@ class TradingEngine:
         today_stats = get_today_trade_stats()
 
         bal = account_info.balance
-        daily_loss_pct   = (self.risk.daily_start_balance - bal) / max(self.risk.daily_start_balance, 1)
-        weekly_loss_pct  = (self.risk.weekly_start_balance - bal) / max(self.risk.weekly_start_balance, 1)
+        risk_equity = account_info.equity
+        controls = self.execution_controls.get()
+        daily_loss_pct   = (self.risk.daily_start_balance - risk_equity) / max(self.risk.daily_start_balance, 1)
+        weekly_loss_pct  = (self.risk.weekly_start_balance - risk_equity) / max(self.risk.weekly_start_balance, 1)
         daily_limit_hit  = daily_loss_pct  >= self.risk._cfg.get('max_daily_loss',  0.04)
         weekly_limit_hit = weekly_loss_pct >= self.risk._cfg.get('max_weekly_loss', 0.10)
-        dd_limit_hit     = self.risk.current_drawdown(bal) >= self.risk._cfg.get('max_drawdown', 0.08)
+        dd_limit_hit     = self.risk.current_drawdown(risk_equity) >= self.risk._cfg.get('max_drawdown', 0.08)
 
         if self.risk._trading_halted:
             risk_lock = 'HALTED'
+        elif not controls.get('trading_enabled', False):
+            risk_lock = 'OPERATOR_DISABLED'
         elif dd_limit_hit:
             risk_lock = 'DD_BREACH'
         elif weekly_limit_hit:
@@ -1766,13 +1907,14 @@ class TradingEngine:
             'initial_balance':     self.risk.initial_balance,
             'peak_balance':        self.risk.peak_balance,
             'margin':              account_info.margin,
+            'margin_level':        getattr(account_info, 'margin_level', 0.0),
             'free_margin':         account_info.margin_free,
             'terminal':            self._terminal,
             'symbols':             symbols_dash,
             'open_trades':         positions_data,
-            'drawdown_pct':        round(self.risk.current_drawdown(bal) * 100, 2),
-            'daily_pnl':           round(self.risk.daily_pnl(bal), 2),
-            'weekly_pnl':          round(self.risk.weekly_pnl(bal), 2),
+            'drawdown_pct':        round(self.risk.current_drawdown(risk_equity) * 100, 2),
+            'daily_pnl':           round(self.risk.daily_pnl(risk_equity), 2),
+            'weekly_pnl':          round(self.risk.weekly_pnl(risk_equity), 2),
             'daily_start_balance': self.risk.daily_start_balance,
             'weekly_start_balance':self.risk.weekly_start_balance,
             'risk_lock':           risk_lock,
@@ -1784,13 +1926,14 @@ class TradingEngine:
                 'closed_trades': today_stats.get('closed_trades', 0),
                 'open_trades_today': today_stats.get('open_trades_today', 0),
                 'win_rate':     today_stats.get('win_rate', 0.0),
-                'today_pnl':    today_stats.get('today_pnl', round(self.risk.daily_pnl(bal), 2)),
-                'weekly_pnl':   round(self.risk.weekly_pnl(bal), 2),
+                'today_pnl':    today_stats.get('today_pnl', round(self.risk.daily_pnl(risk_equity), 2)),
+                'weekly_pnl':   round(self.risk.weekly_pnl(risk_equity), 2),
                 'total_profit': today_stats.get('total_profit', 0),
                 'profit_factor':today_stats.get('profit_factor', 0),
             },
             'all_time_stats': all_time_stats,
             'autonomy': self.cold_start_manager.get_status(),
+            'execution_controls': controls,
         })
 
         # Write AI insights + learning stats separately
@@ -1816,11 +1959,15 @@ class TradingEngine:
                     continue
 
                 balance = account_info.balance
-                self.risk.update_balance(balance)
-                record_equity(balance, account_info.equity)
+                risk_equity = account_info.equity
+                self._account_margin_level = float(
+                    getattr(account_info, 'margin_level', 0.0) or 0.0
+                )
+                self.risk.update_balance(risk_equity)
+                record_equity(balance, risk_equity)
 
                 # Global drawdown halt
-                if not self.risk.check_drawdown_limit(balance):
+                if not self.risk.check_drawdown_limit(risk_equity):
                     self.logger.critical(
                         "DRAWDOWN LIMIT REACHED — engine stopped. "
                         "Review account before restarting."
@@ -1831,7 +1978,7 @@ class TradingEngine:
                 # Process each symbol
                 for symbol in symbols:
                     try:
-                        self._process_symbol(symbol, balance)
+                        self._process_symbol(symbol, risk_equity)
                     except Exception as exc:
                         self.logger.error(
                             f"Error processing {symbol}: {exc}", exc_info=True
@@ -1849,9 +1996,9 @@ class TradingEngine:
                 self._update_dashboard_state(account_info)
 
                 # Progressive autonomy: check upgrade / downgrade each cycle
-                self._check_autonomy_level(balance)
+                self._check_autonomy_level(risk_equity)
 
-                dd_pct = self.risk.current_drawdown(balance) * 100
+                dd_pct = self.risk.current_drawdown(risk_equity) * 100
                 self.logger.info(
                     f"Cycle OK | balance={balance:.2f} | "
                     f"equity={account_info.equity:.2f} | "

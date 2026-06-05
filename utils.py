@@ -430,7 +430,10 @@ def get_open_trades_from_db() -> list:
 
 def get_trade_stats() -> dict:
     if not DB_PATH.exists():
-        return {'win_rate': 0.0, 'profit_factor': 0.0, 'total_trades': 0, 'total_profit': 0.0}
+        return {
+            'win_rate': 0.0, 'profit_factor': 0.0, 'total_trades': 0,
+            'total_profit': 0.0, 'avg_win': 0.0, 'avg_loss': 0.0,
+        }
     conn = sqlite3.connect(str(DB_PATH))
     rows = conn.execute(
         "SELECT profit FROM trades WHERE status='closed'"
@@ -438,7 +441,10 @@ def get_trade_stats() -> dict:
     conn.close()
 
     if not rows:
-        return {'win_rate': 0.0, 'profit_factor': 0.0, 'total_trades': 0, 'total_profit': 0.0}
+        return {
+            'win_rate': 0.0, 'profit_factor': 0.0, 'total_trades': 0,
+            'total_profit': 0.0, 'avg_win': 0.0, 'avg_loss': 0.0,
+        }
 
     profits = [r[0] for r in rows if r[0] is not None]
     wins    = [p for p in profits if p > 0]
@@ -456,6 +462,8 @@ def get_trade_stats() -> dict:
         'profit_factor': round(profit_factor, 3),
         'total_trades':  len(profits),
         'total_profit':  round(sum(profits), 2),
+        'avg_win':       round(gross_profit / len(wins), 2) if wins else 0.0,
+        'avg_loss':      round(gross_loss / len(losses), 2) if losses else 0.0,
     }
 
 

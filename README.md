@@ -12,12 +12,9 @@ pip install MetaTrader5 pandas numpy scikit-learn xgboost lightgbm pyyaml flask
 
 # 2. Open MetaTrader 5 and log in to your account
 
-# 3. Start the engine
-python main.py
-
-# 4. Open the dashboard (separate terminal)
-python dashboard.py
-# Dashboard: http://localhost:8001
+# 3. Start the engine, API, and enterprise dashboard
+python run.py
+# Dashboard: http://localhost:3000
 ```
 
 ---
@@ -210,10 +207,13 @@ Every 60 seconds, exit_intelligence.py evaluates all open positions:
 
 ## Risk Management
 
-- **Kelly Criterion** (quarter-Kelly, capped at 2%) for position sizing
+- **Kelly Criterion**: disabled until 250 closed trades and capped by the hard risk limit
+- **Equity-Based Risk Lock**: floating P&L is included in daily and drawdown gates
+- **Portfolio Open Risk**: new entries stop when cash-at-stop exposure reaches its cap
+- **Execution Control Plane**: audited order-count and lot controls that cannot override risk
 - **Drawdown Scaling**: linear reduction as drawdown grows
 - **Loss Streak Protection**: 50% size after consecutive losses
-- **Adaptive Global Cooldown**: 1 loss=2h, 2=4h, 3=12h, 4+=halt
+- **Adaptive Global Cooldown**: 1 loss=1h, 2=4h, 3=12h, 4+=halt
 - **Direction Ban**: soft (50% size) after 1 same-dir loss, hard ban after 2
 - **Cold-Start Scale**: 60-100% based on autonomy level
 - **Confidence Scale**: 45-100% based on final trade score
@@ -231,14 +231,36 @@ progressive_autonomy:
   max_level: 4         # Set 2 for conservative mode
 
 risk:
-  risk_per_trade: 0.008
+  risk_per_trade: 0.005
+  risk_per_trade_hard_cap: 0.005
+  max_total_open_risk: 0.015
   max_drawdown: 0.10
   adaptive_cooldown:
     enabled: true
 
+execution_controls:
+  default_order_count: 1
+  default_lot_mode: risk_split
+  max_order_count: 4
+  max_lot_per_order: 0.05
+
 strategy:
   min_confluence: 3    # Min 3/5 signals required
 ```
+
+---
+
+## Execution Controls
+
+The Next.js dashboard includes an audited control panel:
+
+- **New Entries Armed/Disabled** applies immediately and does not stop exit management.
+- **Orders per signal** selects how many child orders are requested.
+- **Risk Split** divides one approved aggregate lot budget across child orders.
+- **Fixed Capped** requests a lot per child order but can only be reduced by risk controls.
+
+Operator controls never override Committee Guard, portfolio open risk, margin
+level, broker volume rules, or MT5 order preflight.
 
 ---
 

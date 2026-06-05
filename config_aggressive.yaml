@@ -17,6 +17,9 @@ trading:
 
 risk:
   risk_per_trade:       0.015  # 1.5% base (vs 0.8% baseline).
+  risk_per_trade_hard_cap: 0.010
+  max_total_open_risk:  0.030
+  min_margin_level:     250
                                 # Max 3 concurrent → 4.5% max exposure.
   max_concurrent_trades: 3     # Allow 3 open simultaneously (pyramiding).
   max_daily_loss:       0.05   # 5% daily stop (wider circuit breaker).
@@ -132,6 +135,14 @@ execution:
 dashboard:
   refresh_interval: 5
   port: 8000
+
+execution_controls:
+  default_order_count: 1
+  default_lot_mode: "risk_split"
+  default_lot_per_order: 0.01
+  max_order_count: 3
+  max_lot_per_order: 0.05
+  max_total_lot_per_signal: 0.12
 
 committee_guard:
   enabled: true

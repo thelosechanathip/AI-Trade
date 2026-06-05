@@ -18,6 +18,8 @@ data/ai_insights.json
 data/learning_stats.json
 data/optimizer_history.json
 data/training_monitor.json
+data/execution_controls.json
+data/execution_controls_audit.jsonl
 
 # ── Trained models (retrained on each machine) ───────────────
 models/*.pkl
@@ -44,6 +46,7 @@ desktop.ini
 dashboard/node_modules/
 dashboard/.next/
 dashboard/.env.local
+dashboard/*.tsbuildinfo
 
 # ── Claude tooling ───────────────────────────────────────────
 .claude/

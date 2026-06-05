@@ -21,6 +21,9 @@ trading:
 
 risk:
   risk_per_trade:       0.005   # 0.5% base. Even a 10-loss streak = 5% DD.
+  risk_per_trade_hard_cap: 0.005
+  max_total_open_risk:  0.010
+  min_margin_level:     400
   max_concurrent_trades: 1      # Single position only. No correlated exposure.
   max_daily_loss:       0.015   # 1.5% daily limit. Two full losses max per day.
   max_drawdown:         0.07    # 7% halt — more sensitive to regime change.
@@ -138,6 +141,14 @@ execution:
 dashboard:
   refresh_interval: 5
   port: 8000
+
+execution_controls:
+  default_order_count: 1
+  default_lot_mode: "risk_split"
+  default_lot_per_order: 0.01
+  max_order_count: 1
+  max_lot_per_order: 0.03
+  max_total_lot_per_signal: 0.05
 
 committee_guard:
   enabled: true

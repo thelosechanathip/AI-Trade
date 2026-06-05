@@ -15,3 +15,11 @@ prioritizes survival, stability, consistency, capital preservation, then profit.
   Committee Guard.
 - Risk-First Execution: order flow where sizing and execution are allowed only
   after risk state, setup quality, spread, RR, and context agree.
+- Execution Control Plane: audited operator settings for enabling new entries,
+  choosing requested orders per signal, and selecting a lot mode.
+- Order Plan: the final risk-capped list of child orders derived from one
+  approved aggregate lot budget.
+- Fixed-Capped Lot: an operator-requested lot per child order that may only be
+  reduced by risk budget, portfolio exposure, capacity, or broker constraints.
+- Portfolio Open Risk: estimated cash loss at stop-loss across all strategy
+  positions. New entries fail closed when this exposure cannot be verified.

@@ -51,6 +51,31 @@
   .glow-green { box-shadow: 0 0 20px rgba(0,232,150,0.15); }
   .glow-red   { box-shadow: 0 0 20px rgba(255,77,106,0.15); }
   .glow-blue  { box-shadow: 0 0 20px rgba(77,166,255,0.15); }
+
+  .control-box {
+    @apply rounded-lg border border-[#1e2d40] bg-[#07101d] p-2.5;
+  }
+  .control-label {
+    @apply mb-2 text-[10px] uppercase tracking-wider text-gray-500;
+  }
+  .control-hint {
+    @apply mt-2 text-center text-[9px] text-gray-700;
+  }
+  .step-button {
+    @apply h-8 w-8 rounded-lg border border-[#2a3c55] bg-[#111d2e] text-sm font-bold text-gray-300 transition-colors hover:border-blue-500/50 hover:text-blue-300;
+  }
+  .mode-button {
+    @apply flex flex-col rounded-lg border border-[#1e2d40] bg-[#07101d] p-2 text-left text-[10px] font-semibold text-gray-500 transition-colors hover:border-blue-500/40;
+  }
+  .mode-button span {
+    @apply mt-1 text-[9px] font-normal leading-tight text-gray-700;
+  }
+  .mode-button-active {
+    @apply border-blue-500/50 bg-blue-500/10 text-blue-300;
+  }
+  .mode-button-active span {
+    @apply text-blue-400/60;
+  }
 }
 
 @keyframes flashGreen {
