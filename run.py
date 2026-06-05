@@ -13,6 +13,7 @@ Services:
 import os
 import sys
 import subprocess
+import shutil
 import threading
 import webbrowser
 import time
@@ -65,9 +66,51 @@ def _wait_for_web(port: int, timeout: float = 8.0) -> bool:
     return False
 
 
-def _start_nextjs(dashboard_dir: str) -> subprocess.Popen | None:
+def _find_npm() -> str | None:
+    """Return an npm executable path, including common Windows install paths."""
+    commands = ("npm.cmd", "npm") if sys.platform == "win32" else ("npm",)
+    for command in commands:
+        npm = shutil.which(command)
+        if npm:
+            return npm
+
+    if sys.platform != "win32":
+        return None
+
+    candidates = []
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+        base_dir = os.environ.get(env_name)
+        if base_dir:
+            candidates.append(os.path.join(base_dir, "nodejs", "npm.cmd"))
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        candidates.append(
+            os.path.join(local_app_data, "Programs", "nodejs", "npm.cmd")
+        )
+
+    return next((path for path in candidates if os.path.isfile(path)), None)
+
+
+def _install_nextjs_dependencies(dashboard_dir: str, npm: str) -> bool:
+    """Install dashboard dependencies and report whether installation succeeded."""
+    print("  Installing Next.js dependencies (first run)...")
+    try:
+        result = subprocess.run([npm, "install"], cwd=dashboard_dir, check=False)
+    except OSError as exc:
+        print(f"  WARNING: Could not run npm install: {exc}")
+        return False
+
+    if result.returncode != 0:
+        print(f"  WARNING: npm install failed with exit code {result.returncode}.")
+        return False
+
+    print("  Done. Starting Next.js dev server...")
+    return True
+
+
+def _start_nextjs(dashboard_dir: str, npm: str) -> subprocess.Popen | None:
     """Try to start Next.js dev server. Returns process or None."""
-    npm = "npm.cmd" if sys.platform == "win32" else "npm"
     try:
         proc = subprocess.Popen(
             [npm, "run", "dev"],
@@ -78,7 +121,8 @@ def _start_nextjs(dashboard_dir: str) -> subprocess.Popen | None:
                            if sys.platform == "win32" else 0),
         )
         return proc
-    except FileNotFoundError:
+    except OSError as exc:
+        print(f"  WARNING: Could not start Next.js: {exc}")
         return None
 
 
@@ -125,19 +169,26 @@ def main() -> None:
     node_modules = os.path.join(dashboard_dir, "node_modules")
 
     if launch_ui:
-        if not os.path.exists(node_modules):
-            print("  Installing Next.js dependencies (first run)…")
-            npm = "npm.cmd" if sys.platform == "win32" else "npm"
-            subprocess.run([npm, "install"], cwd=dashboard_dir, check=False)
-            print("  Done. Starting Next.js dev server…")
-        nextjs_proc = _start_nextjs(dashboard_dir)
-        if nextjs_proc:
-            print("  Next.js starting on http://localhost:3000")
-            time.sleep(4)
-            webbrowser.open("http://localhost:3000")
-        else:
-            print("  WARNING: npm not found — open the dashboard manually")
+        npm = _find_npm()
+        if not npm:
+            print("  WARNING: Node.js/npm not found; Next.js UI was skipped.")
+            print("           Install Node.js LTS, then run python run.py again.")
             webbrowser.open(f"http://localhost:{port}")
+        else:
+            dependencies_ready = os.path.exists(node_modules)
+            if not dependencies_ready:
+                dependencies_ready = _install_nextjs_dependencies(dashboard_dir, npm)
+
+            if dependencies_ready:
+                nextjs_proc = _start_nextjs(dashboard_dir, npm)
+
+            if nextjs_proc:
+                print("  Next.js starting on http://localhost:3000")
+                time.sleep(4)
+                webbrowser.open("http://localhost:3000")
+            else:
+                print(f"  Opening fallback dashboard on http://localhost:{port}")
+                webbrowser.open(f"http://localhost:{port}")
     else:
         webbrowser.open(f"http://localhost:{port}")
 
